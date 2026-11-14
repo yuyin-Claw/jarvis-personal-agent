@@ -9,10 +9,23 @@
 
 ## 当前状态
 
-**Pre-alpha（2026-11）**：需求与架构文档定稿 v0.1，工程骨架搭建中。
+**JARVIS 0.1 功能集齐（2026-11-15）**：82 测试全绿，CI 绿。
 
-- JARVIS 0.1 范围：统一人格对话、LLM Gateway、SQLite 记忆、Task Manager、首个 Coding Harness（国内模型驱动）、后台任务、权限与审计
-- 完整路线：Core → Harness Runtime → Continuous Runtime → Context Awareness（Ambient）→ Harness Factory → 数字人与动态 UI
+已落地（`packages/` + `apps/daemon`）：
+
+| 模块 | 能力 |
+|---|---|
+| llm-gateway | GLM/DeepSeek 等 OpenAI 兼容端点直连（流式/超时/错误分类/调用日志），多 provider 路由 |
+| memory | SQLite 记忆引擎：隐私过滤→重要性→去重→入库；CJK 词法检索；对话存储 |
+| task-manager | 八态任务状态机、依赖、崩溃恢复（RUNNING→BLOCKED）、全事件审计 |
+| orchestrator | LLM 意图判定四分支（回答/追问/建任务/续任务），有限工作流无失控循环 |
+| harness-runtime | Coding Harness（LLM 工具循环 + 沙箱：路径越界拦截/命令白名单/危险模式黑名单）+ PermissionBroker（read/write/system/legal 四级裁决 + 审计） |
+| apps/daemon | CLI 全链路：`jarvis`（交互）/ `ask`（单问）/ `--continue`（续会话）/ `tasks`（任务列表） |
+
+使用：设置 `JARVIS_LLM_API_KEY`（或 `jevis/.env`）→ `pnpm daemon`。
+
+- 待办：真实 GLM 端点端到端验收（0.1 三场景）、DeepSeek 端点实测、`jarvis run <id>` 确认执行命令
+- 后续版本：0.2 持续运行（systemd/主动通知）→ 0.3 Ambient 感知 → 0.4 自我扩展（见 PRD §8）
 
 ## 文档
 
