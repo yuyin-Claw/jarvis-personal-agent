@@ -209,3 +209,23 @@ describe("默认组件单元", () => {
     expect(e.score({ kind: "experience", content: "太短", source: "conversation" })).toBeLessThan(0.5);
   });
 });
+
+describe("审计日志（0.3 独立表）", () => {
+  it("追加与查询（最近在前）", () => {
+    engine.appendAudit({ actor: "agent", kind: "task_execute", target: "x", risk: "write", allowed: true, reason: "基线" });
+    engine.appendAudit({ actor: "harness:g", kind: "shell_exec", target: "sudo rm", risk: "legal", allowed: false, reason: "提权命令" });
+    const entries = engine.listAudit(10);
+    expect(entries).toHaveLength(2);
+    expect(entries[0]?.allowed).toBe(false); // 最新的在前
+    expect(entries[0]?.reason).toContain("提权");
+    expect(entries[1]?.risk).toBe("write");
+  });
+
+  it("旧库迁移幂等：audit_logs 表随 migrate 建立", () => {
+    // beforeEach 已 migrate；重复 migrate 不炸且表还在
+    engine.migrate();
+    const db = rawDb(engine);
+    const tables = (db.prepare("SELECT name FROM sqlite_master WHERE type='table' AND name='audit_logs'").all() as unknown[]);
+    expect(tables).toHaveLength(1);
+  });
+});

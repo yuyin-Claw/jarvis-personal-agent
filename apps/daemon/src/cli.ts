@@ -12,7 +12,7 @@
  */
 import readline from "node:readline/promises";
 import { stdin as input, stdout as output } from "node:process";
-import { mkdirSync } from "node:fs";
+import { mkdirSync, readFileSync } from "node:fs";
 import path from "node:path";
 import os from "node:os";
 import type Database from "better-sqlite3";
@@ -37,17 +37,11 @@ async function main(): Promise<void> {
   const tasks = new SqliteTaskManager({ db: taskDb });
   tasks.migrate();
 
-  // ---- 审计落库（audit 简表：写入 messages 表专用会话） ----
-  const auditConv = memory.listConversations().find((c) => c.title === "__audit__");
-  const auditId = auditConv ? auditConv.id : memory.createConversation("__audit__").id;
+  // ---- 审计落库（0.3：独立 audit_logs 表） ----
   const broker = new PermissionBroker({
     audit: {
       append: (e: AuditEntry) => {
-        memory.appendMessage(
-          auditId,
-          "system",
-          `${e.timestamp} ${e.actor} ${e.kind} risk=${e.risk} allow=${e.allowed} ${e.reason} :: ${e.target}`,
-        );
+        memory.appendAudit(e);
       },
     },
   });
@@ -95,7 +89,7 @@ async function main(): Promise<void> {
     },
   });
 
-  // ---- 命令：tasks / run <id> ----
+  // ---- 命令：tasks / run <id> / audit / notify / status ----
   if (args[0] === "tasks") {
     const all = tasks.list();
     if (all.length === 0) {
@@ -104,6 +98,67 @@ async function main(): Promise<void> {
       for (const t of all) {
         console.log(`${t.status.padEnd(18)} ${t.id}  ${t.title}`);
       }
+    }
+    memory.close();
+    return;
+  }
+
+  if (args[0] === "audit") {
+    const limit = Number(args[1] ?? 30);
+    const entries = memory.listAudit(limit);
+    if (entries.length === 0) {
+      console.log("（无审计记录）");
+    } else {
+      for (const e of entries) {
+        const flag = e.allowed ? "✓" : "✕";
+        console.log(
+          `${e.timestamp.slice(11, 19)} ${flag} [${e.risk}] ${e.actor} ${e.kind} — ${e.reason} :: ${e.target.slice(0, 60)}`,
+        );
+      }
+    }
+    memory.close();
+    return;
+  }
+
+  if (args[0] === "notify") {
+    const dataDir = path.dirname(config.dbPath);
+    const notifyFile = path.join(dataDir, "notifications.log");
+    try {
+      const content = readFileSync(notifyFile, "utf8").trim();
+      if (!content) {
+        console.log("（无通知）");
+      } else {
+        const lines = content.split("\n");
+        for (const line of lines.slice(-Number(args[1] ?? 20))) {
+          console.log(line);
+        }
+      }
+    } catch {
+      console.log("（无通知文件——daemon 尚未产生通知）");
+    }
+    memory.close();
+    return;
+  }
+
+  if (args[0] === "status") {
+    const openTasks = tasks.list().filter(
+      (t) => !["COMPLETED", "FAILED", "CANCELLED"].includes(t.status),
+    );
+    const conversations = memory.listConversations().filter((c) => c.title !== "__audit__");
+    const memories = memory.list();
+    const audits = memory.listAudit(1000);
+    const blocked = audits.filter((a) => !a.allowed).length;
+    console.log(`JARVIS 状态`);
+    console.log(`  进行中任务：${openTasks.length}${openTasks.length > 0 ? `（${openTasks.map((t) => t.title).slice(0, 3).join("、")}…）` : ""}`);
+    console.log(`  会话：${conversations.length} · 记忆：${memories.length} 条`);
+    console.log(`  审计：${audits.length} 条（拦截 ${blocked} 次）`);
+    const dataDir = path.dirname(config.dbPath);
+    const notifyFile = path.join(dataDir, "notifications.log");
+    try {
+      const n = readFileSync(notifyFile, "utf8").trim().split("\n").filter(Boolean).length;
+      console.log(`  通知：${n} 条`);
+    } catch {
+      console.log(`  通知：0 条`);
     }
     memory.close();
     return;

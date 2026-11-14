@@ -293,6 +293,58 @@ export class SqliteMemoryEngine implements MemoryEngine {
     }));
   }
 
+  // ---- 审计日志（0.3：独立表） ----
+
+  /** 追加审计记录 */
+  appendAudit(entry: {
+    actor: string;
+    kind: string;
+    target: string;
+    risk: string;
+    allowed: boolean;
+    reason: string;
+  }): void {
+    this.db
+      .prepare(
+        "INSERT INTO audit_logs (timestamp, actor, kind, target, risk, allowed, reason) VALUES (?,?,?,?,?,?,?)",
+      )
+      .run(
+        new Date().toISOString(),
+        entry.actor,
+        entry.kind,
+        entry.target.slice(0, 500),
+        entry.risk,
+        entry.allowed ? 1 : 0,
+        entry.reason,
+      );
+  }
+
+  /** 查询审计（最近的在前） */
+  listAudit(limit = 50): Array<{
+    id: number;
+    timestamp: string;
+    actor: string;
+    kind: string;
+    target: string;
+    risk: string;
+    allowed: boolean;
+    reason: string;
+  }> {
+    const rows = this.db
+      .prepare("SELECT * FROM audit_logs ORDER BY id DESC LIMIT ?")
+      .all(limit) as Array<Record<string, unknown>>;
+    return rows.map((r) => ({
+      id: r.id as number,
+      timestamp: r.timestamp as string,
+      actor: r.actor as string,
+      kind: r.kind as string,
+      target: r.target as string,
+      risk: r.risk as string,
+      allowed: Boolean(r.allowed),
+      reason: r.reason as string,
+    }));
+  }
+
   close(): void {
     this.db.close();
   }

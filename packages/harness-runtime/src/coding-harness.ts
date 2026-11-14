@@ -330,7 +330,11 @@ export class CodingHarness implements HarnessAdapter {
       const child = this.spawnImpl(bin, rest, {
         cwd,
         shell: false,
-        env: { ...process.env, CI: "1" },
+        env: {
+          ...process.env,
+          PATH: process.env.PATH || "/usr/local/bin:/usr/bin:/bin:/usr/sbin:/sbin",
+          CI: "1",
+        },
       });
       let out = "";
       const timer = setTimeout(() => {

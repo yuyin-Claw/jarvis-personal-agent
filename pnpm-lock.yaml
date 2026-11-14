@@ -36,6 +36,9 @@ importers:
 
   apps/daemon:
     dependencies:
+      '@jarvis/context-engine':
+        specifier: workspace:*
+        version: link:../../packages/context-engine
       '@jarvis/harness-runtime':
         specifier: workspace:*
         version: link:../../packages/harness-runtime

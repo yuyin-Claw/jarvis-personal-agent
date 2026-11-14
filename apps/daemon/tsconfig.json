@@ -7,6 +7,7 @@
   "include": ["src"],
   "exclude": ["src/**/*.test.ts"],
   "references": [
+    { "path": "../../packages/context-engine" },
     { "path": "../../packages/harness-runtime" },
     { "path": "../../packages/llm-gateway" },
     { "path": "../../packages/memory" },

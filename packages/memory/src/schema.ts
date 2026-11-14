@@ -37,7 +37,6 @@ export const M_1763140100_MEMORIES: Migration = {
       updated_at TEXT NOT NULL
     )`);
     db.exec("CREATE INDEX idx_memories_kind ON memories(kind)");
-    // 词法检索辅助：content 的小写副本（ESR 风格，够用即可，不引 FTS5 依赖面）
     db.exec(`CREATE TABLE memory_links (
       from_id TEXT NOT NULL REFERENCES memories(id) ON DELETE CASCADE,
       to_id TEXT NOT NULL REFERENCES memories(id) ON DELETE CASCADE,
@@ -47,4 +46,28 @@ export const M_1763140100_MEMORIES: Migration = {
   },
 };
 
-export const ALL_MIGRATIONS = [M_1763140000_CONVERSATIONS, M_1763140100_MEMORIES];
+/** 0.3：审计独立表（替代 __audit__ 会话 hack） */
+export const M_1763140300_AUDIT: Migration = {
+  id: 1763140300,
+  name: "audit_logs",
+  up: (db) => {
+    db.exec(`CREATE TABLE audit_logs (
+      id INTEGER PRIMARY KEY AUTOINCREMENT,
+      timestamp TEXT NOT NULL,
+      actor TEXT NOT NULL,
+      kind TEXT NOT NULL,
+      target TEXT NOT NULL,
+      risk TEXT NOT NULL,
+      allowed INTEGER NOT NULL,
+      reason TEXT NOT NULL
+    )`);
+    db.exec("CREATE INDEX idx_audit_time ON audit_logs(timestamp)");
+    db.exec("CREATE INDEX idx_audit_allowed ON audit_logs(allowed, timestamp)");
+  },
+};
+
+export const ALL_MIGRATIONS = [
+  M_1763140000_CONVERSATIONS,
+  M_1763140100_MEMORIES,
+  M_1763140300_AUDIT,
+];

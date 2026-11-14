@@ -17,6 +17,7 @@ import type Database from "better-sqlite3";
 import { SqliteMemoryEngine } from "@jarvis/memory";
 import { SqliteTaskManager } from "@jarvis/task-manager";
 import { ContinuousRuntime, findStagnantTasks, type NotifyChannel, type ProactiveNotice } from "@jarvis/runtime";
+import { ContextEngine, MacForegroundSource } from "@jarvis/context-engine";
 import { loadConfig } from "./config.js";
 
 /** 通知文件通道（跨进程可读：CLI/未来 UI 轮询此文件展示通知） */
@@ -53,6 +54,11 @@ async function main(): Promise<void> {
   const taskDb = (memory as unknown as { db: Database.Database }).db;
   const tasks = new SqliteTaskManager({ db: taskDb });
   tasks.migrate();
+
+  // ---- Ambient 感知（0.3：activities 表） ----
+  const context = new ContextEngine({ db: taskDb });
+  context.migrate();
+  const foreground = new MacForegroundSource();
 
   // ---- 崩溃恢复（架构 §9.3）----
   const orphans = tasks.recoverOrphans();
@@ -94,6 +100,16 @@ async function main(): Promise<void> {
     },
   });
 
+  // 活动采样 job（macOS 前台应用，默认 2 分钟一次；折叠去重在 engine 内）
+  rt.schedule({
+    id: "activity-sample",
+    name: "活动采样",
+    intervalMs: 120_000,
+    run: async () => {
+      await context.sampleFrom(foreground);
+    },
+  });
+
   // 心跳 job（纯计数，不调模型）
   rt.schedule({
     id: "heartbeat",
@@ -104,8 +120,8 @@ async function main(): Promise<void> {
     },
   });
 
-  console.log(`JARVIS daemon 0.2 · 数据 ${config.dbPath} · 通知 ${notifyFile}`);
-  console.log(`检查间隔 ${checkIntervalMs / 1000}s · 心跳 30s · Ctrl+C 退出`);
+  console.log(`JARVIS daemon 0.3 · 数据 ${config.dbPath} · 通知 ${notifyFile}`);
+  console.log(`检查间隔 ${checkIntervalMs / 1000}s · 活动采样 120s · 心跳 30s · Ctrl+C 退出`);
 
   // 优雅退出
   let stopped = false;
@@ -120,7 +136,9 @@ async function main(): Promise<void> {
   process.on("SIGINT", shutdown);
   process.on("SIGTERM", shutdown);
 
-  // 启动即跑一次检查
+  // 启动即跑一次：活动首采 + 停滞检查
+  const firstSample = rt.getJob("activity-sample");
+  if (firstSample) await rt.runJob(firstSample);
   const first = rt.getJob("stagnation-check");
   if (first) await rt.runJob(first);
 
