@@ -21,6 +21,16 @@
 | 6 | 开发环境：核心模块在 macOS 开发；Omarchy 特有部分在 Try Omarchy 虚拟机验证 | 2026-11-14 |
 | 7 | 代码托管 GitHub 新建公开仓库（账号 yuyin-Claw），本地推送 | 2026-11-14 |
 | 8 | Try Omarchy VM 已首次启动，实测中文汉化程度差——汉化 fork 优先级上调 | 2026-11-14 |
+| 9 | **实施基准确立（用户裁决 2026-11-15）**：0.1-0.3 已落地，保留现项目边界与技术决策不再扩大范围；可靠闭环（任务→理解→执行→验证→汇报）优先于一切扩展；Harness Factory/数字人/动态 UI 挂起不阻塞闭环 | 2026-11-15 |
+
+## 实施进度（2026-11-15 基准）
+
+- **0.1 对话闭环 ✅**：LLM Gateway / Memory / Conversation+人格 / Task Manager / Orchestrator / Coding Harness / PermissionBroker；三场景真实 GLM E2E 全过（含文件落盘回读验证）
+- **0.2 持续运行 ✅**：ContinuousRuntime / ProactiveEngine（去重冷却+每日限额+静默时段）/ 停滞检测 / daemon 常驻（崩溃恢复+双通知通道）
+- **0.3 Ambient ✅**：context-engine（activities 时间线+脱敏红线）+ macOS 前台感知（Swift NSWorkspace 零权限方案）+ audit_logs 独立表 + CLI audit/notify/status
+- 全仓 110/110 测试、CI 绿；GLM key 在 jevis/.env（gitignore 保护）
+- **挂起项**：0.4 Harness Factory、数字人、动态 UI（按基准不启动）
+- **允许的收尾方向**：context-engine.currentContext() 接 Orchestrator（感知→决策闭环）、macOS 原生通知、稳定性打磨
 
 ## 六阶段路线（备忘录既定，顺序不可倒置）
 
@@ -38,6 +48,5 @@ JARVIS 0.1 验收三场景：①委派任务自动调度 Harness 完成并汇报
 
 ## 待验证风险
 
-- DeepSeek 端点工具调用（function calling）行为——Step 2.0 实测
-- Omarchy i18n 机制与硬编码文案规模——汉化 fork 动工前先盘点（VM 内定位英文界面清单）
+- DeepSeek 端点工具调用（function calling）行为——未实测（非阻塞，GLM 已稳定）
 - XDG ScreenCast Portal 会话恢复与锁屏策略（备忘录 §16 未决项）
