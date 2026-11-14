@@ -18,9 +18,9 @@ jobs:
           node-version: 22
           cache: pnpm
       - run: pnpm install --frozen-lockfile
+      - name: Build (workspace 包产物，测试的 vite 解析依赖 dist 入口)
+        run: pnpm run typecheck
       - name: Lint
         run: pnpm lint
-      - name: Typecheck & Build
-        run: pnpm typecheck
       - name: Test
         run: pnpm test
