@@ -66,6 +66,19 @@ importers:
         specifier: ^7.6.12
         version: 7.6.13
 
+  packages/task-manager:
+    dependencies:
+      better-sqlite3:
+        specifier: ^11.10.0
+        version: 11.10.0
+    devDependencies:
+      '@jarvis/tsconfig':
+        specifier: workspace:*
+        version: link:../tsconfig
+      '@types/better-sqlite3':
+        specifier: ^7.6.12
+        version: 7.6.13
+
   packages/tsconfig: {}
 
 packages:

@@ -9,6 +9,7 @@
   "references": [
     { "path": "apps/daemon" },
     { "path": "packages/llm-gateway" },
-    { "path": "packages/memory" }
+    { "path": "packages/memory" },
+    { "path": "packages/task-manager" }
   ]
 }
