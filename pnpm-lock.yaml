@@ -62,6 +62,19 @@ importers:
         specifier: workspace:*
         version: link:../../packages/tsconfig
 
+  packages/avatar:
+    dependencies:
+      '@jarvis/runtime':
+        specifier: workspace:*
+        version: link:../runtime
+      '@jarvis/task-manager':
+        specifier: workspace:*
+        version: link:../task-manager
+    devDependencies:
+      '@jarvis/tsconfig':
+        specifier: workspace:*
+        version: link:../tsconfig
+
   packages/context-engine:
     dependencies:
       '@jarvis/memory':
