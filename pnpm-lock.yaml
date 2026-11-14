@@ -36,12 +36,21 @@ importers:
 
   apps/daemon:
     dependencies:
+      '@jarvis/harness-runtime':
+        specifier: workspace:*
+        version: link:../../packages/harness-runtime
       '@jarvis/llm-gateway':
         specifier: workspace:*
         version: link:../../packages/llm-gateway
       '@jarvis/memory':
         specifier: workspace:*
         version: link:../../packages/memory
+      '@jarvis/orchestrator':
+        specifier: workspace:*
+        version: link:../../packages/orchestrator
+      '@jarvis/task-manager':
+        specifier: workspace:*
+        version: link:../../packages/task-manager
     devDependencies:
       '@jarvis/tsconfig':
         specifier: workspace:*

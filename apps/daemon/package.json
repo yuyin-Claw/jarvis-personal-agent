@@ -14,8 +14,11 @@
     "test": "vitest run"
   },
   "dependencies": {
+    "@jarvis/harness-runtime": "workspace:*",
     "@jarvis/llm-gateway": "workspace:*",
-    "@jarvis/memory": "workspace:*"
+    "@jarvis/memory": "workspace:*",
+    "@jarvis/orchestrator": "workspace:*",
+    "@jarvis/task-manager": "workspace:*"
   },
   "devDependencies": {
     "@jarvis/tsconfig": "workspace:*"

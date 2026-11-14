@@ -26,8 +26,8 @@ function rowToTask(r: Record<string, unknown>): AgentTask {
 }
 
 export interface SqliteTaskManagerOptions {
-  path: string;
-  /** 复用已打开的连接（与 memory 共库时；接管迁移职责需显式传 extraMigrations=[]） */
+  path?: string;
+  /** 复用已打开的连接（与 memory 共库时；path 与 db 二选一） */
   db?: Database.Database;
   extraMigrations?: Migration[];
 }
@@ -41,7 +41,7 @@ export class SqliteTaskManager implements TaskManager {
       this.db = opts.db;
       this.ownsDb = false;
     } else {
-      this.db = new Database(opts.path);
+      this.db = new Database(opts.path ?? ":memory:");
       this.db.pragma("journal_mode = WAL");
       this.ownsDb = true;
     }

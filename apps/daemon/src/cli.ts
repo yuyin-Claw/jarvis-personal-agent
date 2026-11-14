@@ -1,47 +1,82 @@
 #!/usr/bin/env node
 /**
- * JARVIS 0.1 CLI 对话入口
+ * JARVIS 0.1 CLI 对话入口（全链路：对话 + 意图决策 + 任务 + Coding Harness + 权限审计）
  *
  * 用法：
  *   jarvis                  # 新会话交互模式
  *   jarvis --continue       # 继续最近会话
  *   jarvis ask "问题"        # 单次问答
+ *   jarvis tasks            # 任务列表
  *
  * 环境变量见 config.ts。Ctrl+C 退出（状态已持久化，重进 --continue 恢复）。
  */
 import readline from "node:readline/promises";
 import { stdin as input, stdout as output } from "node:process";
+import { mkdirSync } from "node:fs";
+import path from "node:path";
+import os from "node:os";
+import type Database from "better-sqlite3";
 import { LLMGateway, OpenAICompatibleProvider } from "@jarvis/llm-gateway";
 import { SqliteMemoryEngine } from "@jarvis/memory";
+import { SqliteTaskManager } from "@jarvis/task-manager";
+import { Orchestrator } from "@jarvis/orchestrator";
+import { CodingHarness, PermissionBroker, type AuditEntry } from "@jarvis/harness-runtime";
 import { ConversationGateway } from "./gateway.js";
 import { JARVIS_SYSTEM_PROMPT } from "./persona.js";
 import { loadConfig } from "./config.js";
-import { mkdirSync } from "node:fs";
-import path from "node:path";
 
 async function main(): Promise<void> {
   const args = process.argv.slice(2);
   const config = loadConfig();
 
-  // 初始化存储
+  // ---- 存储（memory 与 task 共用一个库文件） ----
   mkdirSync(path.dirname(config.dbPath), { recursive: true });
   const memory = new SqliteMemoryEngine({ path: config.dbPath });
   memory.migrate();
+  const taskDb = (memory as unknown as { db: Database.Database }).db;
+  const tasks = new SqliteTaskManager({ db: taskDb });
+  tasks.migrate();
 
-  // 初始化 LLM
+  // ---- 审计落库（audit 简表：写入 messages 表专用会话） ----
+  const auditConv = memory.listConversations().find((c) => c.title === "__audit__");
+  const auditId = auditConv ? auditConv.id : memory.createConversation("__audit__").id;
+  const broker = new PermissionBroker({
+    audit: {
+      append: (e: AuditEntry) => {
+        memory.appendMessage(
+          auditId,
+          "system",
+          `${e.timestamp} ${e.actor} ${e.kind} risk=${e.risk} allow=${e.allowed} ${e.reason} :: ${e.target}`,
+        );
+      },
+    },
+  });
+
+  // ---- LLM ----
   const gateway = new LLMGateway();
   gateway.register(
     new OpenAICompatibleProvider({
       id: "zhipu",
       baseUrl: config.baseUrl,
       apiKey: config.apiKey,
-      models: [
-        { id: config.model, provider: "zhipu", vision: true },
-      ],
+      models: [{ id: config.model, provider: "zhipu", vision: true }],
     }),
   );
 
-  // 对话 Gateway：流式透传到 stdout
+  // ---- Harness（工作目录：~/jarvis-workspace） ----
+  const workDir = envWorkDir();
+  const harness = new CodingHarness({ gateway, model: config.model });
+
+  // ---- Orchestrator ----
+  const orch = new Orchestrator({
+    gateway,
+    memory,
+    tasks,
+    model: config.model,
+    systemPrompt: JARVIS_SYSTEM_PROMPT,
+  });
+
+  // ---- 对话 Gateway ----
   const conversation = new ConversationGateway({
     memory,
     systemPrompt: JARVIS_SYSTEM_PROMPT,
@@ -60,10 +95,26 @@ async function main(): Promise<void> {
     },
   });
 
-  // 会话选择
+  // ---- 命令：tasks ----
+  if (args[0] === "tasks") {
+    const all = tasks.list();
+    if (all.length === 0) {
+      console.log("（无任务）");
+    } else {
+      for (const t of all) {
+        console.log(`${t.status.padEnd(18)} ${t.id}  ${t.title}`);
+      }
+    }
+    memory.close();
+    return;
+  }
+
+  // ---- 会话选择 ----
   let conversationId: string;
   if (args[0] === "--continue") {
-    const last = memory.listConversations()[0];
+    const last = memory
+      .listConversations()
+      .find((c) => c.title !== "__audit__");
     if (!last) {
       conversationId = conversation.newConversation("新会话");
     } else {
@@ -71,25 +122,78 @@ async function main(): Promise<void> {
       console.log(`（继续会话：${last.title}）`);
     }
   } else {
-    conversationId = conversation.newConversation(args[0] === "ask" ? String(args[1] ?? "提问").slice(0, 30) : "新会话");
+    conversationId = conversation.newConversation(
+      args[0] === "ask" && args[1] ? String(args[1]).slice(0, 30) : "新会话",
+    );
   }
 
-  const ask = async (text: string): Promise<string> => {
-    const result = await conversation.receive(
-      { conversationId, text },
-      {
-        onDelta: (t) => process.stdout.write(t),
-        onMemoryInjected: (hits) => {
-          if (hits.length > 0) {
-            console.log(`〔记忆 ${hits.length} 条：${hits.map((h) => h.content.slice(0, 12)).join("／")}〕`);
-          }
-        },
-      },
-    );
-    return result.assistantText;
-  };
+  // ---- 单轮处理：决策 → 必要时启动 Harness ----
+  async function ask(text: string): Promise<void> {
+    process.stdout.write("JARVIS> ");
 
-  // 单次问答模式
+    // 1. Orchestrator 决策
+    const turn = await orch.handleTurn(conversationId, text);
+    const d = turn.decision;
+
+    // 2. 按决策执行
+    if (d.type === "create_task" && turn.task) {
+      const t = turn.task;
+      // 权限裁决：任务执行
+      const verdict = broker.check({
+        kind: "task_execute",
+        target: t.goal,
+        actor: "agent",
+      });
+      if (t.requiresApproval || !verdict.allow) {
+        console.log(`〔任务已创建，等待你确认后执行〕`);
+        console.log(`  任务 ${t.id}：${t.title}`);
+        console.log(`  目标：${t.goal}`);
+        console.log(`  原因：${t.requiresApproval ? "高危任务" : verdict.reason}`);
+        console.log(`  确认执行：jarvis run ${t.id}`);
+        return;
+      }
+      // 3. 派 Harness 执行
+      console.log(`〔委派 ${harness.id} 执行：${t.title}…〕`);
+      tasks.transition(t.id, "PLANNED");
+      tasks.transition(t.id, "RUNNING");
+      const job = await harness.execute({ workDir, goal: t.goal });
+      tasks.assign(t.id, harness.id, job.jobId);
+      // 等待作业完成
+      for await (const ev of harness.streamEvents(job.jobId)) {
+        if (ev.type === "progress") {
+          output.write(`  ${ev.text.slice(0, 120)}\n`);
+        } else if (ev.type === "completed") {
+          tasks.transition(t.id, "COMPLETED", {
+            output: ev.status.output ?? "",
+            finishedAt: new Date().toISOString(),
+          });
+          console.log(`〔任务完成 · ${ev.status.steps} 步〕`);
+          console.log(ev.status.output ?? "");
+          return;
+        } else if (ev.type === "failed") {
+          tasks.transition(t.id, "FAILED", {
+            error: ev.status.error ?? "未知错误",
+            finishedAt: new Date().toISOString(),
+          });
+          console.log(`〔任务失败〕${ev.status.error ?? ""}`);
+          return;
+        }
+      }
+      return;
+    }
+
+    if (d.type === "continue_task" && turn.task) {
+      console.log(`〔继续任务 ${turn.task.id}：${turn.task.title}〕`);
+      return;
+    }
+
+    // answer / ask：直接输出
+    output.write(d.text + "\n");
+    // 同时落对话记录（决策文本作为 assistant 消息）
+    memory.appendMessage(conversationId, "user", text);
+    memory.appendMessage(conversationId, "assistant", d.text);
+  }
+
   if (args[0] === "ask" && args[1]) {
     await ask(String(args[1]));
     memory.close();
@@ -97,14 +201,13 @@ async function main(): Promise<void> {
   }
 
   // 交互模式
-  console.log(`JARVIS 0.1 · 模型 ${config.model} · Ctrl+C 退出`);
+  console.log(`JARVIS 0.1 · ${config.model} · 工作目录 ${workDir} · Ctrl+C 退出`);
   const rl = readline.createInterface({ input, output });
   try {
     for (;;) {
       const text = (await rl.question("\n你> ")).trim();
       if (!text) continue;
       if (text === "exit" || text === "quit") break;
-      process.stdout.write("JARVIS> ");
       try {
         await ask(text);
       } catch (err) {
@@ -115,6 +218,10 @@ async function main(): Promise<void> {
     rl.close();
     memory.close();
   }
+}
+
+function envWorkDir(): string {
+  return process.env.JARVIS_WORK_DIR ?? path.join(os.homedir(), "jarvis-workspace");
 }
 
 main().catch((err) => {
