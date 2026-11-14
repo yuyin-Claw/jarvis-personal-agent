@@ -6,7 +6,8 @@
   "type": "module",
   "main": "./dist/index.js",
   "bin": {
-    "jarvis": "./dist/cli.js"
+    "jarvis": "./dist/cli.js",
+    "jarvis-daemon": "./dist/daemon.js"
   },
   "scripts": {
     "build": "tsc -b",
@@ -18,6 +19,7 @@
     "@jarvis/llm-gateway": "workspace:*",
     "@jarvis/memory": "workspace:*",
     "@jarvis/orchestrator": "workspace:*",
+    "@jarvis/runtime": "workspace:*",
     "@jarvis/task-manager": "workspace:*"
   },
   "devDependencies": {

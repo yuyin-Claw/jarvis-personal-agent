@@ -12,6 +12,7 @@
     { "path": "packages/llm-gateway" },
     { "path": "packages/memory" },
     { "path": "packages/orchestrator" },
+    { "path": "packages/runtime" },
     { "path": "packages/task-manager" }
   ]
 }

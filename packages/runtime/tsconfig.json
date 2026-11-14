@@ -1,0 +1,14 @@
+{
+  "extends": "@jarvis/tsconfig/node.json",
+  "compilerOptions": {
+    "rootDir": "src",
+    "outDir": "dist"
+  },
+  "include": ["src"],
+  "exclude": ["src/**/*.test.ts"],
+  "references": [
+    { "path": "../../packages/llm-gateway" },
+    { "path": "../../packages/memory" },
+    { "path": "../../packages/task-manager" }
+  ]
+}

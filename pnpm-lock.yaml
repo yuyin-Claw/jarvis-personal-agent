@@ -48,6 +48,9 @@ importers:
       '@jarvis/orchestrator':
         specifier: workspace:*
         version: link:../../packages/orchestrator
+      '@jarvis/runtime':
+        specifier: workspace:*
+        version: link:../../packages/runtime
       '@jarvis/task-manager':
         specifier: workspace:*
         version: link:../../packages/task-manager
@@ -86,6 +89,22 @@ importers:
         version: 7.6.13
 
   packages/orchestrator:
+    dependencies:
+      '@jarvis/llm-gateway':
+        specifier: workspace:*
+        version: link:../llm-gateway
+      '@jarvis/memory':
+        specifier: workspace:*
+        version: link:../memory
+      '@jarvis/task-manager':
+        specifier: workspace:*
+        version: link:../task-manager
+    devDependencies:
+      '@jarvis/tsconfig':
+        specifier: workspace:*
+        version: link:../tsconfig
+
+  packages/runtime:
     dependencies:
       '@jarvis/llm-gateway':
         specifier: workspace:*
