@@ -42,10 +42,17 @@ export interface OrchestratorOptions {
   tasks: TaskManager;
   model: string;
   systemPrompt: string;
+  /** 可选：环境上下文供给（context-engine 注入；无则决策不感知环境） */
+  contextProvider?: () => Array<{ app: string; hits: number }>;
 }
 
 /** 意图判定提示词（严格 JSON 输出）；记忆块供回答时引用 */
-function intentPrompt(userText: string, openTasks: AgentTask[], memoryBlock?: string): string {
+function intentPrompt(
+  userText: string,
+  openTasks: AgentTask[],
+  memoryBlock?: string,
+  envBlock?: string,
+): string {
   const openList =
     openTasks.length === 0
       ? "（无进行中任务）"
@@ -56,8 +63,11 @@ function intentPrompt(userText: string, openTasks: AgentTask[], memoryBlock?: st
   const memorySection = memoryBlock
     ? `\n长期记忆（参考信息，回答相关问题时引用）：\n${memoryBlock}\n`
     : "";
+  const envSection = envBlock
+    ? `\n用户当前环境（最近使用中的应用，仅供参考，用户未提及时不要主动展开）：\n${envBlock}\n`
+    : "";
   return `分析用户输入，决定下一步动作。只输出 JSON，不要输出其他内容。
-${memorySection}
+${memorySection}${envSection}
 进行中任务：
 ${openList}
 
@@ -73,6 +83,7 @@ ${openList}
 - 涉及删除、支付、系统级变更、发送给他人 → requiresApproval=true
 - 模糊指代（"继续"、"刚才那个"）且无进行中任务 → ask 澄清
 - 长期记忆中有能回答用户问题的内容时，在 text 中使用它
+- 用户说"这个/刚才那个文件"等指代时，可结合环境上下文推断
 - text 字段始终是面向用户的话（中文）`;
 }
 
@@ -82,6 +93,7 @@ export class Orchestrator {
   private readonly tasks: TaskManager;
   private readonly model: string;
   private readonly systemPrompt: string;
+  private readonly contextProvider: OrchestratorOptions["contextProvider"];
 
   constructor(opts: OrchestratorOptions) {
     this.gateway = opts.gateway;
@@ -89,11 +101,12 @@ export class Orchestrator {
     this.tasks = opts.tasks;
     this.model = opts.model;
     this.systemPrompt = opts.systemPrompt;
+    this.contextProvider = opts.contextProvider;
   }
 
   /** 主决策循环（每轮一次 LLM 意图判定；有限，无循环工具调用） */
   async handleTurn(conversationId: string, userText: string): Promise<OrchestratorTurn> {
-    // 1. Load context：检索记忆 + 进行中任务（记忆进意图判定上下文）
+    // 1. Load context：检索记忆 + 进行中任务 + 环境快照（均进意图判定上下文）
     const memoryHits = this.memory.search(userText, { limit: 5 });
     const memoryBlock =
       memoryHits.length > 0
@@ -102,6 +115,11 @@ export class Orchestrator {
     const openTasks = this.tasks.list().filter(
       (t) => !["COMPLETED", "FAILED", "CANCELLED"].includes(t.status),
     );
+    const envApps = this.contextProvider?.() ?? [];
+    const envBlock =
+      envApps.length > 0
+        ? envApps.map((a) => `- ${a.app}（${a.hits} 次）`).join("\n")
+        : undefined;
 
     // 2. Understand intent（结构化输出）
     const messages: ChatMessage[] = [
@@ -110,7 +128,10 @@ export class Orchestrator {
     for (const m of this.memory.listMessages(conversationId).slice(-10)) {
       messages.push({ role: m.role === "system" ? "system" : m.role, content: m.content });
     }
-    messages.push({ role: "user", content: intentPrompt(userText, openTasks, memoryBlock) });
+    messages.push({
+      role: "user",
+      content: intentPrompt(userText, openTasks, memoryBlock, envBlock),
+    });
 
     const res = await this.gateway.generate({ model: this.model, messages });
     const decision = this.parseDecision(res.content);

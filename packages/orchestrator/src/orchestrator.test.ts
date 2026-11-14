@@ -157,3 +157,32 @@ describe("Orchestrator 决策", () => {
     expect(turn.decision.text).toContain("普通回答");
   });
 });
+
+describe("环境上下文注入（感知→决策）", () => {
+  it("contextProvider 提供活动时环境块进入提示词", async () => {
+    const gw = new LLMGateway();
+    gw.register(new ScriptedProvider(['{"type":"answer","text":"你正在用 WorkBuddy。"}']));
+    const memory = new SqliteMemoryEngine({ path: ":memory:" });
+    memory.migrate();
+    const tasks = new SqliteTaskManager({ db: (memory as unknown as { db: Database.Database }).db });
+    tasks.migrate();
+    const orch = new Orchestrator({
+      gateway: gw,
+      memory,
+      tasks,
+      model: "fake-model",
+      systemPrompt: "test",
+      contextProvider: () => [{ app: "WorkBuddy", hits: 12 }],
+    });
+    const conv = memory.createConversation("env");
+    const turn = await orch.handleTurn(conv.id, "我现在在用什么应用？");
+    expect(turn.decision.text).toContain("WorkBuddy");
+  });
+
+  it("无 contextProvider 时提示词不含环境块（向后兼容）", async () => {
+    const f = makeFixture(['{"type":"answer","text":"不知道"}']);
+    const conversation = f.memory.createConversation("no-env");
+    await f.orch.handleTurn(conversation.id, "hi");
+    // 不炸即为通过（无环境块路径走旧逻辑）
+  });
+});

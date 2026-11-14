@@ -21,6 +21,7 @@ import { SqliteMemoryEngine } from "@jarvis/memory";
 import { SqliteTaskManager } from "@jarvis/task-manager";
 import { Orchestrator } from "@jarvis/orchestrator";
 import { CodingHarness, PermissionBroker, type AuditEntry } from "@jarvis/harness-runtime";
+import { ContextEngine, MacForegroundSource } from "@jarvis/context-engine";
 import { ConversationGateway } from "./gateway.js";
 import { JARVIS_SYSTEM_PROMPT } from "./persona.js";
 import { loadConfig } from "./config.js";
@@ -36,6 +37,13 @@ async function main(): Promise<void> {
   const taskDb = (memory as unknown as { db: Database.Database }).db;
   const tasks = new SqliteTaskManager({ db: taskDb });
   tasks.migrate();
+
+  // ---- Ambient 感知（感知→决策接线） ----
+  const context = new ContextEngine({ db: taskDb });
+  context.migrate();
+  const foreground = new MacForegroundSource();
+  // 启动预采一次（决策时读已入库数据；provider 里的异步补采供下一轮）
+  await context.sampleFrom(foreground).catch(() => undefined);
 
   // ---- 审计落库（0.3：独立 audit_logs 表） ----
   const broker = new PermissionBroker({
@@ -68,6 +76,11 @@ async function main(): Promise<void> {
     tasks,
     model: config.model,
     systemPrompt: JARVIS_SYSTEM_PROMPT,
+    contextProvider: () => {
+      // 决策时补采一次（有折叠去重，开销可忽略）+ 读最近 30 分钟
+      void context.sampleFrom(foreground).catch(() => undefined);
+      return context.currentContext(30);
+    },
   });
 
   // ---- 对话 Gateway ----
