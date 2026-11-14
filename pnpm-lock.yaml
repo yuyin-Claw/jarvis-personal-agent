@@ -59,6 +59,16 @@ importers:
         specifier: workspace:*
         version: link:../../packages/tsconfig
 
+  packages/context-engine:
+    dependencies:
+      '@jarvis/memory':
+        specifier: workspace:*
+        version: link:../memory
+    devDependencies:
+      '@jarvis/tsconfig':
+        specifier: workspace:*
+        version: link:../tsconfig
+
   packages/harness-runtime:
     dependencies:
       '@jarvis/llm-gateway':
