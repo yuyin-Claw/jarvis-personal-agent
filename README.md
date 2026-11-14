@@ -9,23 +9,56 @@
 
 ## 当前状态
 
-**JARVIS 0.1 功能集齐（2026-11-15）**：82 测试全绿，CI 绿。
-
-已落地（`packages/` + `apps/daemon`）：
+**v0.1.0（2026-11-15）**：117 测试全绿，CI 绿；真实 GLM E2E 三场景 + 实战演练 4/4 通过。
 
 | 模块 | 能力 |
 |---|---|
-| llm-gateway | GLM/DeepSeek 等 OpenAI 兼容端点直连（流式/超时/错误分类/调用日志），多 provider 路由 |
-| memory | SQLite 记忆引擎：隐私过滤→重要性→去重→入库；CJK 词法检索；对话存储 |
-| task-manager | 八态任务状态机、依赖、崩溃恢复（RUNNING→BLOCKED）、全事件审计 |
-| orchestrator | LLM 意图判定四分支（回答/追问/建任务/续任务），有限工作流无失控循环 |
-| harness-runtime | Coding Harness（LLM 工具循环 + 沙箱：路径越界拦截/命令白名单/危险模式黑名单）+ PermissionBroker（read/write/system/legal 四级裁决 + 审计） |
-| apps/daemon | CLI 全链路：`jarvis`（交互）/ `ask`（单问）/ `--continue`（续会话）/ `tasks`（任务列表） |
+| llm-gateway | OpenAI 兼容多 provider 直连（流式/超时/错误分类/调用日志）+ rawChat 工具协议 |
+| memory | 记忆管道（隐私过滤→重要性→去重）、CJK 检索、对话存储、audit_logs |
+| task-manager | 八态状态机、依赖、崩溃恢复、事件审计 |
+| orchestrator | 意图判定四分支、对话记忆提取、环境上下文注入 |
+| harness-runtime | Coding Harness（工具循环+沙箱）+ PermissionBroker（四级裁决+审计） |
+| runtime | 持续运行：定时调度、主动通知裁决（冷却/限额/静默时段）、停滞检测、macOS 原生通知 |
+| context-engine | activities 时间线（脱敏红线）、macOS 前台感知（零权限）、上下文快照 |
+| apps/daemon | CLI + 常驻 daemon |
 
-使用：设置 `JARVIS_LLM_API_KEY`（或 `jevis/.env`）→ `pnpm daemon`。
+## 快速开始
 
-- 待办：真实 GLM 端点端到端验收（0.1 三场景）、DeepSeek 端点实测、`jarvis run <id>` 确认执行命令
-- 后续版本：0.2 持续运行（systemd/主动通知）→ 0.3 Ambient 感知 → 0.4 自我扩展（见 PRD §8）
+```bash
+# 1. 配置（key 只走环境变量/.env，不入库）
+cat > .env << 'EOF'
+JARVIS_LLM_API_KEY=<你的 GLM key>
+EOF
+
+# 2. 构建
+pnpm install && pnpm run typecheck
+
+# 3. 对话（单问 / 交互 / 续会话）
+node apps/daemon/dist/cli.js ask "帮我写一个词频统计脚本"
+node apps/daemon/dist/cli.js            # 交互模式
+node apps/daemon/dist/cli.js --continue # 续最近会话
+
+# 4. 管理命令
+node apps/daemon/dist/cli.js tasks   # 任务列表
+node apps/daemon/dist/cli.js run <id> # 放行待确认任务
+node apps/daemon/dist/cli.js audit   # 审计记录
+node apps/daemon/dist/cli.js notify  # 通知历史
+node apps/daemon/dist/cli.js status  # 全局概览
+
+# 5. 常驻 daemon（停滞检查/活动采样/通知）
+node apps/daemon/dist/daemon.js --check-interval 120
+```
+
+**环境变量**：`JARVIS_LLM_API_KEY`（必填）、`JARVIS_LLM_MODEL`（默认 glm-5.3-flash）、
+`JARVIS_LLM_BASE_URL`、`JARVIS_DB_PATH`（默认 `~/.local/share/jarvis/database/jarvis.db`）、
+`JARVIS_WORK_DIR`（Harness 工作边界，默认 `~/jarvis-workspace`）、`JARVIS_ENV_FILE`。
+
+**常驻化**：macOS 见 `~/Library/LaunchAgents/com.jarvis.daemon.plist`（本机 launchctl 受
+管控时用 `~/.local/share/jarvis/bin/jarvis-daemon.sh` 保活脚本）；Linux 用 systemd --user。
+
+**安全设计**：Harness 只能操作 `JARVIS_WORK_DIR` 内文件；命令白名单 + 危险模式黑名单；
+高危任务（删除/支付/凭证/提权）自动停确认门等 `run` 放行；全部操作落 audit_logs；
+感知数据经脱敏（敏感标题拒收）入库，可随时清空。
 
 ## 文档
 

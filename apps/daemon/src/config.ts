@@ -42,8 +42,10 @@ function loadDotEnv(file: string): Record<string, string> {
 }
 
 export function loadConfig(env: NodeJS.ProcessEnv = process.env): JarvisConfig {
-  // 优先级：真实环境变量 > 项目 .env > 仓库 .env
+  // 优先级：真实环境变量 > JARVIS_ENV_FILE 指定文件 > 项目 .env > 仓库 .env
+  const envFile = env.JARVIS_ENV_FILE;
   const dotenv = {
+    ...(envFile ? loadDotEnv(envFile) : {}),
     ...loadDotEnv(path.join(process.cwd(), ".env")),
     ...loadDotEnv(path.join(process.cwd(), "..", ".env")),
   };
