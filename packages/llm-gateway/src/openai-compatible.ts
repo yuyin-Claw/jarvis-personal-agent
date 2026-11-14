@@ -88,7 +88,11 @@ export class OpenAICompatibleProvider implements LLMProvider {
   /** 原始 chat 调用（含 tool_calls 等扩展字段；Harness 层使用） */
   async rawChat(
     request: LLMRequest & { tools?: unknown[] },
-  ): Promise<{ content?: string; tool_calls?: Array<{ id: string; function: { name: string; arguments: string } }> }> {
+  ): Promise<{
+    role: "assistant";
+    content?: string;
+    tool_calls?: Array<{ id: string; function: { name: string; arguments: string } }>;
+  }> {
     const res = await this.request(
       "/chat/completions",
       {
@@ -109,6 +113,7 @@ export class OpenAICompatibleProvider implements LLMProvider {
     };
     const msg = raw.choices?.[0]?.message;
     return {
+      role: "assistant" as const,
       ...(msg?.content !== undefined && msg.content !== null ? { content: msg.content } : {}),
       ...(msg?.tool_calls ? { tool_calls: msg.tool_calls } : {}),
     };
