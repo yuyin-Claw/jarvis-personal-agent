@@ -1,4 +1,4 @@
-import { describe, expect, it } from "vitest";
+import { afterEach, beforeEach, describe, expect, it } from "vitest";
 import { SqliteMemoryEngine } from "@jarvis/memory";
 import { ConversationGateway } from "./gateway.js";
 import { JARVIS_SYSTEM_PROMPT, greetingWithMemory } from "./persona.js";
@@ -130,15 +130,17 @@ describe("人格", () => {
 });
 
 describe("配置", () => {
-  it("缺 API key 报错且不静默降级", () => {
-    // 显式空环境；注意 loadDotEnv 会读 cwd/.env，测试环境无该文件
-    const cwd = process.cwd();
+  // 隔离 .env：切到无 .env 的目录跑（loadDotEnv 读 cwd）
+  const origCwd = process.cwd();
+  beforeEach(() => {
     process.chdir("/tmp");
-    try {
-      expect(() => loadConfig({})).toThrow(/JARVIS_LLM_API_KEY/);
-    } finally {
-      process.chdir(cwd);
-    }
+  });
+  afterEach(() => {
+    process.chdir(origCwd);
+  });
+
+  it("缺 API key 报错且不静默降级", () => {
+    expect(() => loadConfig({})).toThrow(/JARVIS_LLM_API_KEY/);
   });
 
   it("正常加载与默认值", () => {

@@ -7,7 +7,7 @@
  * 0.1 决策用结构化输出（LLM 判定意图），有限状态工作流，不允许模型无限循环调工具。
  */
 import type { ChatMessage, LLMGateway } from "@jarvis/llm-gateway";
-import type { MemoryEngine } from "@jarvis/memory";
+import type { MemoryCandidate, MemoryEngine } from "@jarvis/memory";
 import type { AgentTask, TaskManager } from "@jarvis/task-manager";
 
 /** 决策类型（架构 §3.3 Decide Action 分支） */
@@ -44,8 +44,8 @@ export interface OrchestratorOptions {
   systemPrompt: string;
 }
 
-/** 意图判定提示词（严格 JSON 输出） */
-function intentPrompt(userText: string, openTasks: AgentTask[]): string {
+/** 意图判定提示词（严格 JSON 输出）；记忆块供回答时引用 */
+function intentPrompt(userText: string, openTasks: AgentTask[], memoryBlock?: string): string {
   const openList =
     openTasks.length === 0
       ? "（无进行中任务）"
@@ -53,8 +53,11 @@ function intentPrompt(userText: string, openTasks: AgentTask[]): string {
           .slice(0, 5)
           .map((t) => `- ${t.id}: ${t.title}（${t.status}）`)
           .join("\n");
+  const memorySection = memoryBlock
+    ? `\n长期记忆（参考信息，回答相关问题时引用）：\n${memoryBlock}\n`
+    : "";
   return `分析用户输入，决定下一步动作。只输出 JSON，不要输出其他内容。
-
+${memorySection}
 进行中任务：
 ${openList}
 
@@ -69,6 +72,7 @@ ${openList}
 判断规则：
 - 涉及删除、支付、系统级变更、发送给他人 → requiresApproval=true
 - 模糊指代（"继续"、"刚才那个"）且无进行中任务 → ask 澄清
+- 长期记忆中有能回答用户问题的内容时，在 text 中使用它
 - text 字段始终是面向用户的话（中文）`;
 }
 
@@ -89,9 +93,12 @@ export class Orchestrator {
 
   /** 主决策循环（每轮一次 LLM 意图判定；有限，无循环工具调用） */
   async handleTurn(conversationId: string, userText: string): Promise<OrchestratorTurn> {
-    // 1. Load context：检索记忆 + 进行中任务（记忆注入已由 ConversationGateway 负责，
-    //    此处检索供后续 Memory Update 参考）
-    const _memoryHits = this.memory.search(userText, { limit: 5 });
+    // 1. Load context：检索记忆 + 进行中任务（记忆进意图判定上下文）
+    const memoryHits = this.memory.search(userText, { limit: 5 });
+    const memoryBlock =
+      memoryHits.length > 0
+        ? memoryHits.map((h) => "- " + h.record.content).join("\n")
+        : undefined;
     const openTasks = this.tasks.list().filter(
       (t) => !["COMPLETED", "FAILED", "CANCELLED"].includes(t.status),
     );
@@ -103,7 +110,7 @@ export class Orchestrator {
     for (const m of this.memory.listMessages(conversationId).slice(-10)) {
       messages.push({ role: m.role === "system" ? "system" : m.role, content: m.content });
     }
-    messages.push({ role: "user", content: intentPrompt(userText, openTasks) });
+    messages.push({ role: "user", content: intentPrompt(userText, openTasks, memoryBlock) });
 
     const res = await this.gateway.generate({ model: this.model, messages });
     const decision = this.parseDecision(res.content);
@@ -125,7 +132,7 @@ export class Orchestrator {
       }
     }
 
-    // 4. Memory update（决策沉淀）
+    // 4. Memory update（双路沉淀）
     let memoriesSaved = 0;
     if (task) {
       const rec = this.memory.remember({
@@ -134,6 +141,12 @@ export class Orchestrator {
         source: "conversation",
         sourceRef: conversationId,
       });
+      if (rec) memoriesSaved++;
+    }
+    // 对话记忆提取：从用户输入提炼可沉淀事实（本地规则，不额外调模型）
+    const extracted = extractMemoryCandidates(userText, decision.text);
+    for (const cand of extracted) {
+      const rec = this.memory.remember({ ...cand, sourceRef: conversationId });
       if (rec) memoriesSaved++;
     }
 
@@ -186,4 +199,37 @@ export class Orchestrator {
       return { type: "answer", text: raw.trim() };
     }
   }
+}
+
+/** 对话记忆提取（本地规则：只存陈述句事实，排除疑问句） */
+export function extractMemoryCandidates(
+  userText: string,
+  _assistantText: string,
+): MemoryCandidate[] {
+  const out: MemoryCandidate[] = [];
+  // 疑问/不确定句不入库
+  if (/[?？]$/.test(userText.trim()) || /是什么|是什么|哪个|怎么|如何|吗[?？]?$/.test(userText)) {
+    return out;
+  }
+  // 模式：请记住 X / 我的 X 是 Y / 项目代号是 X
+  const patterns: Array<{ re: RegExp; kind: MemoryCandidate["kind"] }> = [
+    { re: /(?:请|帮我)?记住[：:]?\s*(.{4,60})/, kind: "user_profile" },
+    { re: /我的(.{1,12}?)是(.{1,40})/, kind: "user_profile" },
+    { re: /项目(?:代号|名称|名叫)[是：:]?\s*['「"]?([^'」"，。]{1,20})['」"]?/, kind: "project" },
+    { re: /我(?:喜欢|讨厌|住在)(.{2,30})/, kind: "user_profile" },
+  ];
+  for (const { re, kind } of patterns) {
+    const m = userText.match(re);
+    if (m) {
+      let content = m[0].replace(/^[请帮我]*记住[：:]?\s*/, "").trim();
+      // 项目代号模式：重组为完整陈述
+      if (re.source.includes("代号") && m[1]) {
+        content = `项目代号为${m[1].trim()}`;
+      }
+      if (content.length >= 4) {
+        out.push({ kind, content: content.slice(0, 100), source: "conversation" });
+      }
+    }
+  }
+  return out.slice(0, 2); // 每轮最多沉淀 2 条，防刷库
 }
