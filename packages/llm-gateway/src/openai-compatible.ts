@@ -85,6 +85,35 @@ export class OpenAICompatibleProvider implements LLMProvider {
     return this.models.some((m) => m.id === model);
   }
 
+  /** 原始 chat 调用（含 tool_calls 等扩展字段；Harness 层使用） */
+  async rawChat(
+    request: LLMRequest & { tools?: unknown[] },
+  ): Promise<{ content?: string; tool_calls?: Array<{ id: string; function: { name: string; arguments: string } }> }> {
+    const res = await this.request(
+      "/chat/completions",
+      {
+        model: request.model,
+        messages: request.messages,
+        ...(request.tools ? { tools: request.tools } : {}),
+        ...(request.temperature !== undefined ? { temperature: request.temperature } : {}),
+      },
+      request.timeoutMs ?? this.defaultTimeoutMs,
+    );
+    const raw = (await res.json()) as {
+      choices?: Array<{
+        message?: {
+          content?: string | null;
+          tool_calls?: Array<{ id: string; function: { name: string; arguments: string } }>;
+        };
+      }>;
+    };
+    const msg = raw.choices?.[0]?.message;
+    return {
+      ...(msg?.content !== undefined && msg.content !== null ? { content: msg.content } : {}),
+      ...(msg?.tool_calls ? { tool_calls: msg.tool_calls } : {}),
+    };
+  }
+
   getModels(): Promise<ModelInfo[]> {
     // 静态声明：模型清单由配置给定，避免每次列模型打网络
     return Promise.resolve([...this.models]);

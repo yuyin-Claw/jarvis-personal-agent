@@ -47,6 +47,16 @@ importers:
         specifier: workspace:*
         version: link:../../packages/tsconfig
 
+  packages/harness-runtime:
+    dependencies:
+      '@jarvis/llm-gateway':
+        specifier: workspace:*
+        version: link:../llm-gateway
+    devDependencies:
+      '@jarvis/tsconfig':
+        specifier: workspace:*
+        version: link:../tsconfig
+
   packages/llm-gateway:
     devDependencies:
       '@jarvis/tsconfig':

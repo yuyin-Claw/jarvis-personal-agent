@@ -8,6 +8,7 @@
   "files": [],
   "references": [
     { "path": "apps/daemon" },
+    { "path": "packages/harness-runtime" },
     { "path": "packages/llm-gateway" },
     { "path": "packages/memory" },
     { "path": "packages/orchestrator" },
