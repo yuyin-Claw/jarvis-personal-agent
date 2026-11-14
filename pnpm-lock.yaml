@@ -161,6 +161,16 @@ importers:
 
   packages/tsconfig: {}
 
+  packages/voice:
+    dependencies:
+      '@jarvis/avatar':
+        specifier: workspace:*
+        version: link:../avatar
+    devDependencies:
+      '@jarvis/tsconfig':
+        specifier: workspace:*
+        version: link:../tsconfig
+
 packages:
 
   '@esbuild/aix-ppc64@0.21.5':

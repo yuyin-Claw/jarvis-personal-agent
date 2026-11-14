@@ -15,6 +15,7 @@
     { "path": "packages/memory" },
     { "path": "packages/orchestrator" },
     { "path": "packages/runtime" },
-    { "path": "packages/task-manager" }
+    { "path": "packages/task-manager" },
+    { "path": "packages/voice" }
   ]
 }

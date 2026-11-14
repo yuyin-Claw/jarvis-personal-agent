@@ -20,12 +20,25 @@
 - 自动验收 `apps/avatar/scripts/verify-render.sh`：六状态驱动 → 宿主窗口截图 →
   像素断言（发光量、状态主色、相邻帧差），不依赖人工看图
 
+### 新增（0.2-③ 语音双向）
+- `@jarvis/voice`：
+  - `MacSayTTS`——macOS `say` 输出（参数数组防注入、控制字符清洗、
+    `-o` 静默合成用于验收、SIGTERM 打断并返回 interrupted）
+  - `VoiceIO`——TTS 生命周期 ↔ AvatarStateEngine 事件闭环；强度包络驱动
+    全息球波动；打断时只派 `user_interrupt`、绝不派 `tts_end`（防错误回 idle）
+  - `SpeechInput`——消费 SFSpeechRecognizer JSONL，partial 首段自动打断 TTS，
+    final 结束聆听；权限探测未就绪时自动降级文本输入、不弹系统授权窗
+- `packages/voice/native/speech-input.swift`：中文实时识别助手（zh-CN），
+  `--status-only` 可在零权限下探测授权状态
+
 ### 修复
 - 首版宿主把 JSON 文本直接插入 `JSON.parse()` 且 FIFO 读端一次性关闭，
   导致状态指令全部被吞；改为 base64 注入 + 状态文件轮询
 
 ### 验收
-- 136/136 测试通过；六状态端到端渲染验收通过（帧 106→394，橙/绿/紫主色实测上屏）
+- 160/160 测试通过；六状态端到端渲染验收通过（帧 106→394，橙/绿/紫主色实测上屏）
+- `packages/voice/scripts/verify-tts.sh`：`say` 真实合成 AIFF（39KB，不发声）、
+  状态轨迹 listening>thinking>speaking>idle、tts 事件齐备、识别权限探测通过
 
 ## [0.1.0] - 2026-11-15
 

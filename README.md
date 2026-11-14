@@ -92,6 +92,16 @@ apps/avatar/scripts/verify-render.sh
 Node 侧推荐用 `AvatarRenderTransport`（`packages/avatar`）发布状态或直接
 `bind(engine)` 订阅状态引擎，无需手写 seq。
 
+语音链路（0.2-③）：
+
+```sh
+packages/voice/scripts/verify-tts.sh   # say 只写 AIFF 文件，不发声
+```
+
+`MacSayTTS` 负责输出，`VoiceIO` 把 TTS 生命周期接到状态引擎，
+`SpeechInput` 消费 macOS 语音识别的 JSONL；用户开口的首段识别结果会立即
+打断 TTS。语音识别授权未就绪时自动降级到文本输入，不弹系统窗、不阻塞主流程。
+
 ## 核心设计原则
 
 1. **人格统一**——Harness 永远是执行环境，不成为用户的交互入口
