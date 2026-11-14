@@ -34,21 +34,17 @@ VM 传参已带 `tryomarchy.mac_language=zh tryomarchy.locale=zh_CN.UTF-8`，但
 
 ## 修正后的行动计划（替代原第 2/3 步全量 fork）
 
-### 第 1 步：VM 内切换中文并实测（5 分钟）
+### 第 1 步：VM 内切换中文并实测（✅ 2026-11-14 完成）
 
-- [ ] VM 内执行 `omarchy-language zh-CN`（或菜单 Setup > Language > 简体中文）
-- [ ] 截图核对：菜单/bar/通知/快捷键提示/设置项/手册是否全部中文
-- [ ] 若有个别词条仍英文 → 记录具体 key（用上游 catalog 比对确认是"翻译缺失"还是"按规范保留"）
+- [x] VM 内切换中文（菜单 Setup → Language → 简体中文）
+- [x] **界面已确认变中文**——上游 zh-CN 覆盖结论得到实测验证
+- [ ] （收尾可选）日常使用中记录残留英文词条；字体/输入法（fcitx5/rime）体验确认
 
-### 第 2 步：按实测结果分叉
+### 第 2 步：后续（低优先级，观察驱动）
 
-- **情况 A（大概率）：切换后即全中文** → 取消 fork 计划。剩余工作：
-  - [ ] 中文字体与 fcitx5/rime 输入法配置确认（中文语言自带输入法与 CJK 字形，docs/input-methods.md）
-  - [ ] 找到的真实缺失词条 → 直接向上游提 PR/i18n-sync（上游有完善翻译流程，回馈成本低于自维护）
-  - [ ] Try Omarchy 的 first-boot owner setup 未跟随宿主语言的问题 → 向 omacom/try-omarchy 反馈
-- **情况 B（小概率）：切换后仍有成片英文** → 定位是 catalog 缺失还是硬编码：
-  - catalog 缺失 → 补翻译提 PR（上游机器人流程会自动接收）
-  - 硬编码（bin/ 安装脚本等）→ 上游设计如此（终端/诊断保留英文），评估是否值得 fork
+- 发现真实缺失词条 → 向上游提 PR/i18n-sync（上游有完善翻译流程，回馈成本低于自维护）
+- Try Omarchy 首次启动未跟随宿主语言（宿主传了 zh 但 owner setup 仍英文默认）→ 适合向 omacom/try-omarchy 反馈改进建议
+- 无需 fork 维护——上游翻译由 Muse 机器人持续自动同步
 
 ### 原 fork 维护路线（已降级为备选，仅在 B 且上游拒收 PR 时启用）
 

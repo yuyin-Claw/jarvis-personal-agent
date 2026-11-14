@@ -31,7 +31,7 @@ JARVIS 0.1 验收三场景：①委派任务自动调度 Harness 完成并汇报
 ## 环境事实
 
 - Try Omarchy v1.2.0 已装于 /Applications，VM 已首次启动（2026-11-14）；**VM 内 Omarchy = 4.0.0.r7848.g723072a（edge 滚动版，非 4.5.0）**，版本看 `~/Library/Application Support/Try Omarchy/VM/v1/shell/guest-status.json`
-- **汉化盘点结论（2026-11-14）**：上游 zh-CN 翻译 100% 覆盖（menu 437/shell 555/cli 434/keybindings 193 + 51 篇手册），由 Muse 机器人 CI 自动同步；用户看到英文的最可能原因是 Omarchy 语言设置未切中文（`omarchy-language zh-CN`）——**fork 全量汉化计划已取消**，改为"切换验证 + 缺词条回馈上游"
+- **汉化盘点结论（2026-11-14，已实测验证）**：上游 zh-CN 翻译 100% 覆盖（menu 437/shell 555/cli 434/keybindings 193 + 51 篇手册），由 Muse 机器人 CI 自动同步；VM 内已切换中文成功（菜单 Setup→Language→简体中文）——**fork 全量汉化计划已取消**，后续仅按需回馈上游
 - GitHub：账号 yuyin-Claw 已 gh 登录；clone/下载加速走 gh-proxy.com
 - 用户模型服务：智谱 GLM Coding Plan（glm-5.3-flash，OpenAI 兼容端点，文本/流式/视觉实测全通）；DeepSeek 待实测
 - git 全局配置：yuyin / mbollemitraka30@outlook.com
