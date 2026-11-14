@@ -1,0 +1,27 @@
+# macOS
+.DS_Store
+
+# Node
+node_modules/
+dist/
+*.tsbuildinfo
+
+# 环境与凭证（凭证只入系统 Secret Service，不入仓库）
+.env
+.env.*
+*.key
+*.pem
+
+# 日志与本地数据
+logs/
+*.log
+.local/
+
+# 编辑器
+.idea/
+.vscode/*
+!.vscode/extensions.json
+!.vscode/settings.json
+
+# WorkBuddy 工作区记忆（本地协作产物，不入公开仓库）
+.workbuddy/
