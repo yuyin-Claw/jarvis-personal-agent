@@ -95,7 +95,7 @@ async function main(): Promise<void> {
     },
   });
 
-  // ---- 命令：tasks ----
+  // ---- 命令：tasks / run <id> ----
   if (args[0] === "tasks") {
     const all = tasks.list();
     if (all.length === 0) {
@@ -103,6 +103,47 @@ async function main(): Promise<void> {
     } else {
       for (const t of all) {
         console.log(`${t.status.padEnd(18)} ${t.id}  ${t.title}`);
+      }
+    }
+    memory.close();
+    return;
+  }
+
+  if (args[0] === "run" && args[1]) {
+    const t = tasks.get(String(args[1]));
+    if (!t) {
+      console.error(`任务不存在：${args[1]}`);
+      process.exitCode = 1;
+      memory.close();
+      return;
+    }
+    if (t.status !== "CREATED" && t.status !== "BLOCKED") {
+      console.error(`任务状态 ${t.status} 不可执行（需 CREATED/BLOCKED）`);
+      process.exitCode = 1;
+      memory.close();
+      return;
+    }
+    console.log(`〔用户确认执行：${t.title}〕目标：${t.goal}`);
+    tasks.transition(t.id, "PLANNED");
+    tasks.transition(t.id, "RUNNING");
+    const job = await harness.execute({ workDir, goal: t.goal });
+    tasks.assign(t.id, harness.id, job.jobId);
+    for await (const ev of harness.streamEvents(job.jobId)) {
+      if (ev.type === "progress") {
+        output.write(`  ${ev.text.slice(0, 120)}\n`);
+      } else if (ev.type === "completed") {
+        tasks.transition(t.id, "COMPLETED", {
+          output: ev.status.output ?? "",
+          finishedAt: new Date().toISOString(),
+        });
+        console.log(`〔完成 · ${ev.status.steps} 步〕\n${ev.status.output ?? ""}`);
+      } else if (ev.type === "failed") {
+        tasks.transition(t.id, "FAILED", {
+          error: ev.status.error ?? "",
+          finishedAt: new Date().toISOString(),
+        });
+        console.error(`〔失败〕${ev.status.error ?? ""}`);
+        process.exitCode = 1;
       }
     }
     memory.close();
