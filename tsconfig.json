@@ -7,6 +7,7 @@
   },
   "files": [],
   "references": [
+    { "path": "apps/daemon" },
     { "path": "packages/llm-gateway" },
     { "path": "packages/memory" }
   ]

@@ -1,0 +1,23 @@
+{
+  "name": "@jarvis/daemon",
+  "version": "0.0.1",
+  "private": true,
+  "license": "MIT",
+  "type": "module",
+  "main": "./dist/index.js",
+  "bin": {
+    "jarvis": "./dist/cli.js"
+  },
+  "scripts": {
+    "build": "tsc -b",
+    "start": "node dist/cli.js",
+    "test": "vitest run"
+  },
+  "dependencies": {
+    "@jarvis/llm-gateway": "workspace:*",
+    "@jarvis/memory": "workspace:*"
+  },
+  "devDependencies": {
+    "@jarvis/tsconfig": "workspace:*"
+  }
+}
