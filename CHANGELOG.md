@@ -3,6 +3,30 @@
 本项目的显著变更记录在此。格式参照 [Keep a Changelog](https://keepachangelog.com/zh-CN/1.1.0/)，
 版本号遵循 [SemVer](https://semver.org/lang/zh-CN/)。
 
+## [Unreleased] — 0.2 Embodied Conversational Agent
+
+### 新增（0.2-① 状态引擎）
+- `@jarvis/avatar`：AvatarStateEngine 六状态机（idle/listening/thinking/speaking/
+  working/responding）+ 转换表 + responding 自动回落；AestheticState 与渲染技术解耦
+- CoreEventBridge：任务状态 diff 与对话轮生命周期 → CoreEvent；13 单测
+
+### 新增（0.2-② 全息渲染）
+- `apps/avatar/avatar.html`：Canvas 粒子全息球，六状态独立波形/配色/HUD，
+  暴露 `window.jarvis` / `window.setAvatarState`
+- `apps/avatar/avatar-host.swift`：macOS 透明置顶 NSWindow + WKWebView 宿主，
+  状态文件（seq 递增）控制通道 + ack 回写 + 自身窗口截图
+- `AvatarRenderTransport`：Core → 表现层单向通道（原子写、seq 断点续传、
+  引擎绑定、ack / 截图等待）
+- 自动验收 `apps/avatar/scripts/verify-render.sh`：六状态驱动 → 宿主窗口截图 →
+  像素断言（发光量、状态主色、相邻帧差），不依赖人工看图
+
+### 修复
+- 首版宿主把 JSON 文本直接插入 `JSON.parse()` 且 FIFO 读端一次性关闭，
+  导致状态指令全部被吞；改为 base64 注入 + 状态文件轮询
+
+### 验收
+- 136/136 测试通过；六状态端到端渲染验收通过（帧 106→394，橙/绿/紫主色实测上屏）
+
 ## [0.1.0] - 2026-11-15
 
 首个可用版本：统一人格对话、长期记忆、任务调度、Coding Harness、权限审计、

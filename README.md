@@ -70,6 +70,28 @@ node apps/daemon/dist/daemon.js --check-interval 120
 | [docs/PLAN-jevis-0.1.md](docs/PLAN-jevis-0.1.md) | 0.1 实施计划 |
 | [AGENTS.md](AGENTS.md) | 人机协作契约（贡献前必读） |
 
+## 0.2 数字人（进行中）
+
+JARVIS 0.2 的数字人是存在主体，不是装饰：表现层经事件桥与 Core 解耦，
+只消费 `AestheticState`。当前已完成状态引擎与全息渲染（B 全息 AI 助手方向）。
+
+```sh
+# 编译并运行透明置顶窗口（macOS）
+cd apps/avatar
+swiftc -O -framework Cocoa -framework WebKit avatar-host.swift -o jarvis-avatar
+./jarvis-avatar "$PWD/avatar.html"
+
+# 驱动状态（另开终端；seq 必须递增）
+echo '{"seq":1,"state":"speaking","intensity":0.85,"amplitude":0.7,"caption":"你好"}' \
+  > ~/.local/share/jarvis/avatar.state.json
+
+# 端到端自动验收：六状态驱动 → 窗口截图 → 像素断言
+apps/avatar/scripts/verify-render.sh
+```
+
+Node 侧推荐用 `AvatarRenderTransport`（`packages/avatar`）发布状态或直接
+`bind(engine)` 订阅状态引擎，无需手写 seq。
+
 ## 核心设计原则
 
 1. **人格统一**——Harness 永远是执行环境，不成为用户的交互入口

@@ -17,6 +17,9 @@ logs/
 *.log
 .local/
 
+# 编译产物（macOS 原生宿主二进制，由 verify-render.sh 现场编译）
+apps/avatar/jarvis-avatar
+
 # 编辑器
 .idea/
 .vscode/*
