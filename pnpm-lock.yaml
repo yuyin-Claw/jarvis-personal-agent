@@ -66,6 +66,22 @@ importers:
         specifier: ^7.6.12
         version: 7.6.13
 
+  packages/orchestrator:
+    dependencies:
+      '@jarvis/llm-gateway':
+        specifier: workspace:*
+        version: link:../llm-gateway
+      '@jarvis/memory':
+        specifier: workspace:*
+        version: link:../memory
+      '@jarvis/task-manager':
+        specifier: workspace:*
+        version: link:../task-manager
+    devDependencies:
+      '@jarvis/tsconfig':
+        specifier: workspace:*
+        version: link:../tsconfig
+
   packages/task-manager:
     dependencies:
       better-sqlite3:

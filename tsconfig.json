@@ -10,6 +10,7 @@
     { "path": "apps/daemon" },
     { "path": "packages/llm-gateway" },
     { "path": "packages/memory" },
+    { "path": "packages/orchestrator" },
     { "path": "packages/task-manager" }
   ]
 }
