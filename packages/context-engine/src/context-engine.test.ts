@@ -96,35 +96,27 @@ describe("ContextEngine", () => {
 });
 
 describe("MacForegroundWithTitleSource", () => {
-  it("解析 osascript 输出（注入 exec）", async () => {
-    const src = new MacForegroundWithTitleSource(async () => ({
-      stdout: "Safari|GitHub · scala/scala",
-      stderr: "",
-    }));
-    // 平台守卫在 darwin 之外返回 null——直接测内部解析：临时改 platform 检查
-    // 用 Object.defineProperty 模拟 darwin
-    const orig = Object.getOwnPropertyDescriptor(process, "platform");
-    Object.defineProperty(process, "platform", { value: "darwin" });
-    try {
-      const result = await src.sample();
-      expect(result?.app).toBe("Safari");
-      expect(result?.detail).toBe("GitHub · scala/scala");
-    } finally {
-      if (orig) Object.defineProperty(process, "platform", orig);
-    }
+  it("解析 osascript 输出（注入 exec + platform 参数）", async () => {
+    const src = new MacForegroundWithTitleSource(
+      async () => ({
+        stdout: "Safari|GitHub · scala/scala",
+        stderr: "",
+      }),
+      "darwin",
+    );
+    const result = await src.sample();
+    expect(result?.app).toBe("Safari");
+    expect(result?.detail).toBe("GitHub · scala/scala");
   });
 
   it("exec 失败返回 null", async () => {
-    const src = new MacForegroundWithTitleSource(async () => {
-      throw new Error("osascript denied");
-    });
-    const orig = Object.getOwnPropertyDescriptor(process, "platform");
-    Object.defineProperty(process, "platform", { value: "darwin" });
-    try {
-      expect(await src.sample()).toBeNull();
-    } finally {
-      if (orig) Object.defineProperty(process, "platform", orig);
-    }
+    const src = new MacForegroundWithTitleSource(
+      async () => {
+        throw new Error("osascript denied");
+      },
+      "darwin",
+    );
+    expect(await src.sample()).toBeNull();
   });
 
   it("非 darwin 平台直接 null（不 exec）", async () => {
