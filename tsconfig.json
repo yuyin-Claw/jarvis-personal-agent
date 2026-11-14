@@ -1,0 +1,12 @@
+{
+  "$schema": "https://json.schemastore.org/tsconfig",
+  "extends": "./packages/tsconfig/base.json",
+  "compilerOptions": {
+    "noEmit": true,
+    "composite": false
+  },
+  "files": [],
+  "references": [
+    { "path": "packages/llm-gateway" }
+  ]
+}

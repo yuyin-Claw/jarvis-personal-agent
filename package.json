@@ -1,0 +1,26 @@
+{
+  "name": "jarvis",
+  "private": true,
+  "version": "0.0.1",
+  "description": "JARVIS Personal Agent — One Persona, One Conversation, Multiple Execution Engines",
+  "license": "MIT",
+  "packageManager": "pnpm@10.30.1",
+  "engines": {
+    "node": ">=20"
+  },
+  "scripts": {
+    "build": "tsc -b",
+    "test": "vitest run",
+    "test:watch": "vitest",
+    "lint": "eslint .",
+    "typecheck": "tsc -b --noEmit",
+    "daemon": "pnpm --filter @jarvis/daemon start"
+  },
+  "devDependencies": {
+    "@eslint/js": "^9.16.0",
+    "@types/node": "^22.10.0",
+    "typescript": "^5.7.2",
+    "typescript-eslint": "^8.18.0",
+    "vitest": "^2.1.8"
+  }
+}
