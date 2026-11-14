@@ -3,5 +3,6 @@ packages:
   - packages/*
   - adapters/*
 
-ignoredBuiltDependencies:
-  - esbuild
+# 原生模块构建放行（pnpm v10 默认拦截 postinstall；better-sqlite3 需编译原生绑定）
+onlyBuiltDependencies:
+  - better-sqlite3
