@@ -50,3 +50,12 @@ JARVIS 0.1 验收三场景：①委派任务自动调度 Harness 完成并汇报
 
 - DeepSeek 端点工具调用（function calling）行为——未实测（非阻塞，GLM 已稳定）
 - XDG ScreenCast Portal 会话恢复与锁屏策略（备忘录 §16 未决项）
+
+## 0.2 基准变更（用户裁决 2026-11-15 凌晨）
+
+- **数字人提前为核心**（原 0.4+ 挂起项解冻）：数字人=JARVIS 与用户交流的主体，非装饰
+- 新里程碑 **JARVIS 0.2 = Embodied Conversational Agent**（原 0.2/0.3 已并入 v0.1.0，版本号无冲突）
+- 视觉方向（用户选定）：**B 全息 AI 助手**——粒子/光效/HUD，抽象表现替代拟真唇形；未来可切 VRM 3D
+- 架构铁律：Avatar = 实时表现层（AvatarStateEngine + CoreEventBridge），经事件桥与 Core 解耦，渲染技术可替换 Core 零改动
+- 六状态：idle/listening/thinking/speaking/working/responding，与 Core 事件绑定（用户说话→listening；LLM→thinking；Harness→working；TTS→speaking；完成→responding；打断→立即切 listening）
+- 五步：①状态引擎+事件桥 ②全息渲染 ③语音双向（TTS/输入/打断） ④对话连接 ⑤主动交流
