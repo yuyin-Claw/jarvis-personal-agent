@@ -16,7 +16,7 @@ import path from "node:path";
 import type Database from "better-sqlite3";
 import { SqliteMemoryEngine } from "@jarvis/memory";
 import { SqliteTaskManager } from "@jarvis/task-manager";
-import { ContinuousRuntime, findStagnantTasks, type NotifyChannel, type ProactiveNotice } from "@jarvis/runtime";
+import { ContinuousRuntime, findStagnantTasks, MacNotifyChannel, type NotifyChannel, type ProactiveNotice } from "@jarvis/runtime";
 import { ContextEngine, MacForegroundSource } from "@jarvis/context-engine";
 import { loadConfig } from "./config.js";
 
@@ -68,7 +68,7 @@ async function main(): Promise<void> {
 
   // ---- Continuous Runtime ----
   const rt = new ContinuousRuntime({
-    channels: [new StdoutNotifyChannel(), new FileNotifyChannel(notifyFile)],
+    channels: [new StdoutNotifyChannel(), new FileNotifyChannel(notifyFile), new MacNotifyChannel()],
     policy: {
       dedupeCooldownMs: 3_600_000, // 同主题 1 小时最多提醒一次
       dailyLimit: 20,
