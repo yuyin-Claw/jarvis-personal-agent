@@ -5,5 +5,12 @@
     "outDir": "dist"
   },
   "include": ["src"],
-  "exclude": ["src/**/*.test.ts"]
+  "exclude": ["src/**/*.test.ts"],
+  "references": [
+    { "path": "../../packages/harness-runtime" },
+    { "path": "../../packages/llm-gateway" },
+    { "path": "../../packages/memory" },
+    { "path": "../../packages/orchestrator" },
+    { "path": "../../packages/task-manager" }
+  ]
 }
