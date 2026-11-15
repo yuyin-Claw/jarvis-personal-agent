@@ -107,3 +107,24 @@
 - 代价：macOS 开发机没有本地语音服务实现；macOS 上的语音验收为
   「Core 在开发机 + 语音服务在 Omarchy guest」的跨系统形态（`verify-omarchy-voice.mjs`）。
 - 状态：已接受（2026-11-15 用户裁决；同日更正「独立拆分」表述）
+
+**ADR-010: JARVIS 系统栈开机自启动（数字人随系统启动即就位）**
+- 场景：生产化部署初期语音服务已 systemd 常驻，但数字人窗口仍靠手动拉起。
+  用户 2026-11-15 裁决：「这将是整个系统的唯一操作入口」——用户澄清其含义
+  即**开机自启动**：系统启动数字人就在，无需手动启动。此前的「全部交互仅经
+  数字人、不设其他 GUI」表述属过度引申，已按用户本意更正。
+- 决策：
+  - **开机自启**：Omarchy 上 JARVIS 系统栈 = `jarvis-voice.service`
+    （systemd --user，default.target）+ `jarvis-avatar.service`
+    （systemd --user，graphical-session.target）+ 后续 jarvis daemon。
+    开机（图形会话登录）= 数字人就位 = 语音就位，无手动步骤。
+  - 部署物统一在 `apps/voice-service/deploy/`（install.sh 幂等安装两个 unit +
+    Hyprland Lua 窗口规则）；生产验收以 `verify-omarchy-production.mjs`
+    15 断言为准（双 unit enabled/active、kill -9 自愈、浮动窗口六状态像素断言）。
+  - jarvis-avatar.service 绑定 graphical-session.target（PartOf）：注销/合成器
+    退出时窗口随之停止，重登自动回来；语音服务不受图形会话影响。
+- 理由：数字人作为系统的存在主体，「开机即在」是基本产品形态——
+  用户开机的第一眼就有 JARVIS，而不是先去找启动器。
+- 代价：数字人窗口进程成为常驻组件，其崩溃必须自愈（restart=on-failure 已覆盖）；
+  Core daemon 的 Linux 常驻单元尚待部署（下一步）。
+- 状态：已接受（2026-11-15 用户裁决；同日按用户澄清更正表述）

@@ -1,0 +1,26 @@
+# JARVIS voice-service —— systemd --user unit（Omarchy 生产形态）
+# 安装：~/.config/systemd/user/jarvis-voice.service
+# 启用：systemctl --user daemon-reload && systemctl --user enable --now jarvis-voice
+
+[Unit]
+Description=JARVIS 语音服务（TTS/ASR，Omarchy 系统组成部分，ADR-009）
+After=network.target
+# Try Omarchy 无图形会话登录时也保持可启动（服务本身不依赖 Wayland）
+ConditionUser=!root
+
+[Service]
+Type=simple
+WorkingDirectory=%h/Omarchy/jarvis-voice-service
+# espeak-ng 为无 root 安装到 ~/.local，需显式带库与数据路径
+Environment=PATH=%h/.local/espeak/usr/bin:/usr/local/bin:/usr/bin:/bin
+Environment=LD_LIBRARY_PATH=%h/.local/espeak/usr/lib
+Environment=ESPEAK_DATA_PATH=%h/.local/espeak/usr/share/espeak-ng-data
+ExecStart=/usr/bin/node src/server.mjs --backend omarchy --port 8787
+Restart=on-failure
+RestartSec=2
+# 结构化崩溃日志进 journald
+StandardOutput=journal
+StandardError=journal
+
+[Install]
+WantedBy=default.target

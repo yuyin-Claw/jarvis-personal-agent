@@ -1,0 +1,28 @@
+# JARVIS 数字人窗口 —— systemd --user unit（Omarchy 生产形态）
+# 安装：~/.config/systemd/user/jarvis-avatar.service
+# 随图形会话自启（graphical-session.target）；崩溃自动重启。
+#
+# ADR-010：JARVIS 系统栈开机自启动——图形会话登录数字人即就位，
+# 不依赖任何手动拉起。
+
+[Unit]
+Description=JARVIS 数字人窗口（开机自启，ADR-010）
+PartOf=graphical-session.target
+After=graphical-session.target
+# 语音服务先行（窗口 HUD 不依赖它，但同栈整体有序拉起）
+After=jarvis-voice.service
+Wants=jarvis-voice.service
+
+[Service]
+Type=simple
+# 窗口规则（浮动/置顶/右下角）由 ~/.config/hypr/jarvis.lua 定义，安装时已加载
+ExecStart=/usr/bin/python3 %h/Omarchy/jarvis-avatar-host.py \
+  --html %h/Omarchy/avatar.html \
+  --socket %t/jarvis-avatar.sock
+Restart=on-failure
+RestartSec=2
+StandardOutput=journal
+StandardError=journal
+
+[Install]
+WantedBy=graphical-session.target

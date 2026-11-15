@@ -24,6 +24,14 @@
 - `verify-omarchy-voice.mjs` 去除宿主上游降级通道（随 MacBackend 一并移除），
   guest 服务以纯本地引擎运行
 
+### 新增（生产化部署，ADR-010 系统栈开机自启动）
+- `apps/voice-service/deploy/`：双 systemd --user unit（jarvis-voice →
+  default.target；jarvis-avatar → graphical-session.target，登录即数字人就位、
+  崩溃自动重启、注销随停重登自回）、Try Omarchy Lua windowrule（数字人右下角
+  420x480 浮动置顶小窗）、一键 install.sh
+- `verify-omarchy-production.mjs`：生产形态 15 断言全过——双 unit enabled/active、
+  kill -9 后自动拉起、Core 经生产服务 ASR/TTS、浮动窗口六状态区域截图像素断言
+
 ### 验收
 - guest 内 superwhisper ASR 真实识别 fixture「请介绍一下你自己。」与
   「等一下，我有个问题。」；espeak-ng 真实合成 203KB WAV；

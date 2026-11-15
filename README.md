@@ -107,6 +107,18 @@ JARVIS_VOICE_URL=http://<omarchy>:8787 jarvis talk "在吗"
 node adapters/omarchy/scripts/verify-omarchy-voice.mjs
 ```
 
+生产部署（ADR-010：JARVIS 系统栈开机自启动——系统启动数字人即就位）：
+
+```sh
+# 一键安装 = 语音服务 + 数字人窗口双 systemd --user unit + Hyprland 窗口规则
+#   jarvis-voice  → default.target（无图形也常驻，崩溃自动重启）
+#   jarvis-avatar → graphical-session.target（登录即数字人就位）
+sh apps/voice-service/deploy/install.sh
+
+# 生产形态端到端验收（15 断言）：双 unit / kill -9 自愈 / 浮动窗口六状态像素断言
+node adapters/omarchy/scripts/verify-omarchy-production.mjs
+```
+
 Core 内 `MacSayTTS` / `SpeechInput` 仅作为 macOS 适配器（`adapters/macos`）的
 开发验证台实现；服务化路径下 Core 不绑定任何语音引擎。语音识别授权未就绪时
 自动降级到文本输入，不弹系统窗、不阻塞主流程。
