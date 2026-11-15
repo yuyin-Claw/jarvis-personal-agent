@@ -80,9 +80,15 @@ importers:
       '@jarvis/adapter-omarchy':
         specifier: workspace:*
         version: link:../../adapters/omarchy
+      '@jarvis/avatar':
+        specifier: workspace:*
+        version: link:../../packages/avatar
       '@jarvis/context-engine':
         specifier: workspace:*
         version: link:../../packages/context-engine
+      '@jarvis/embodied':
+        specifier: workspace:*
+        version: link:../../packages/embodied
       '@jarvis/harness-runtime':
         specifier: workspace:*
         version: link:../../packages/harness-runtime
@@ -104,6 +110,9 @@ importers:
       '@jarvis/task-manager':
         specifier: workspace:*
         version: link:../../packages/task-manager
+      '@jarvis/voice':
+        specifier: workspace:*
+        version: link:../../packages/voice
     devDependencies:
       '@jarvis/tsconfig':
         specifier: workspace:*
@@ -127,6 +136,16 @@ importers:
       '@jarvis/memory':
         specifier: workspace:*
         version: link:../memory
+    devDependencies:
+      '@jarvis/tsconfig':
+        specifier: workspace:*
+        version: link:../tsconfig
+
+  packages/embodied:
+    dependencies:
+      '@jarvis/avatar':
+        specifier: workspace:*
+        version: link:../avatar
     devDependencies:
       '@jarvis/tsconfig':
         specifier: workspace:*

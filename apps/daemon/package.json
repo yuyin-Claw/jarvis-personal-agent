@@ -17,14 +17,17 @@
   "dependencies": {
     "@jarvis/adapter-macos": "workspace:*",
     "@jarvis/adapter-omarchy": "workspace:*",
+    "@jarvis/avatar": "workspace:*",
     "@jarvis/context-engine": "workspace:*",
+    "@jarvis/embodied": "workspace:*",
     "@jarvis/harness-runtime": "workspace:*",
     "@jarvis/llm-gateway": "workspace:*",
     "@jarvis/memory": "workspace:*",
     "@jarvis/orchestrator": "workspace:*",
     "@jarvis/platform": "workspace:*",
     "@jarvis/runtime": "workspace:*",
-    "@jarvis/task-manager": "workspace:*"
+    "@jarvis/task-manager": "workspace:*",
+    "@jarvis/voice": "workspace:*"
   },
   "devDependencies": {
     "@jarvis/tsconfig": "workspace:*"

@@ -70,10 +70,11 @@ node apps/daemon/dist/daemon.js --check-interval 120
 | [docs/PLAN-jevis-0.1.md](docs/PLAN-jevis-0.1.md) | 0.1 实施计划 |
 | [AGENTS.md](AGENTS.md) | 人机协作契约（贡献前必读） |
 
-## 0.2 数字人（进行中）
+## 0.2 数字人（v0.2.0）
 
 JARVIS 0.2 的数字人是存在主体，不是装饰：表现层经事件桥与 Core 解耦，
-只消费 `AestheticState`。当前已完成状态引擎与全息渲染（B 全息 AI 助手方向）。
+只消费 `AestheticState`。五步路线（状态引擎 / 全息渲染 / 语音双向 / 对话连接 /
+主动交流）均已落地。
 
 ```sh
 # 编译并运行透明置顶窗口（macOS）
@@ -121,6 +122,31 @@ macOS 是开发验证台，Omarchy 是首个系统宿主（ADR-001/005）。Omar
 Hyprland/Portal/PipeWire 与 Wayland 窗口渲染需在 Try Omarchy 虚拟机实测；
 自包含验证包位于 `~/Omarchy/jarvis-omarchy-probe/`，guest 内执行 `sh verify.sh`
 即可输出五端点真实依赖状态。
+
+### 具身对话与主动交流（0.2-④⑤）
+
+`packages/embodied` 是平台无关的编排层：把一轮用户输入编成完整表现弧
+`idle → listening → thinking → [working → responding] → speaking → idle`，
+LLM 异常经 `llm_error` 立即回 idle，用户开口立即打断 TTS 且不播报旧结果。
+`ProactiveVoiceChannel` 把后台主动通知变成数字人开口：只在 idle 时播报，
+忙时排队（high 插队、队列上限与 TTL），不打断用户说话或正在执行的任务。
+
+```sh
+jarvis talk "帮我记一下"    # 具身对话：数字人窗口 + 语音 + 流式对话
+jarvis talk                # 交互模式
+jarvis-daemon              # 常驻：停滞检测 / 空闲主动交流 / 任务状态表现
+
+# 无窗口 / 静音 / 静默合成（自动验收用）
+JARVIS_TALK_NO_AVATAR=1 JARVIS_TALK_NO_VOICE=1 jarvis talk "在吗"
+JARVIS_DAEMON_AVATAR=0 JARVIS_PROACTIVE_VOICE=0 jarvis-daemon
+
+# 0.2-④⑤ 端到端自动验收：真实窗口 + 静默 TTS + 六状态像素断言
+packages/embodied/scripts/verify-embodied.sh
+```
+
+`jarvis talk` 走 `ConversationGateway`（记忆注入 + 流式回复 + 落库），
+`jarvis-daemon` 经 `TaskEventWatcher` 把任务状态 diff 映射到 working/responding。
+所有平台能力都经 `adapters/platform` 注入，Core 与桌面实现零耦合。
 
 ## 核心设计原则
 

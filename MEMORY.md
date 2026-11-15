@@ -60,3 +60,6 @@ JARVIS 0.1 验收三场景：①委派任务自动调度 Harness 完成并汇报
 - 架构铁律：Avatar = 实时表现层（AvatarStateEngine + CoreEventBridge），经事件桥与 Core 解耦，渲染技术可替换 Core 零改动
 - 六状态：idle/listening/thinking/speaking/working/responding，与 Core 事件绑定（用户说话→listening；LLM→thinking；Harness→working；TTS→speaking；完成→responding；打断→立即切 listening）
 - 五步：①状态引擎+事件桥 ②全息渲染 ③语音双向（TTS/输入/打断） ④对话连接 ⑤主动交流
+- **2026-11-15 收尾**：五步全部完成并发布 `v0.2.0`；ADR-007 补平台适配层
+  （Core → Platform Adapter → macos/omarchy），ADR-008 固化具身对话与主动交流的事件归属；
+  自动验收以生产 composition root 驱动真实窗口 + 像素断言为准，禁止手工 setState 冒充对话

@@ -58,3 +58,26 @@
 - 代价：需维护两套平台实现；Omarchy 侧 Hyprland/Portal/PipeWire 需在 VM 实测
   （当前 Try Omarchy VM 无 guest-exec、sshd 未随运行时 hostfwd 启动，实测通道待打通）。
 - 状态：已接受（2026-11-15 用户裁决：补适配层 + Omarchy 实现）
+
+**ADR-008: 0.2-④⑤ 具身对话编排与主动交流的事件归属**
+- 场景：0.2-①②③ 各自可跑，但 Core 对话链路（ConversationGateway / Orchestrator）、
+  后台主动通知（ContinuousRuntime.ProactiveEngine）与数字人表现层尚未连接。
+  状态事件若由多处重复派发，会出现 tts_end 误回 idle、responding 被覆盖等错乱。
+- 决策：
+  - 新增 `packages/embodied`（平台无关），**唯一持有一轮对话的表现弧编排**：
+    `EmbodiedConversation` 派发 user_speech_* / llm_* / harness_* / tts_*；
+    `VoiceIO` 保留 TTS 生命周期事件（tts_end / user_interrupt）的归属，
+    由 `speaker.emitsStateEvents` 显式声明，禁止隐式双派。
+  - 主动通知经 `ProactiveVoiceChannel` 转为数字人开口；`ProactiveEngine` 仍负责
+    去重 / 每日限额 / 静默时段，两者职责不重叠。只在 idle 播报，忙时排队
+    （high 插队、队列上限、TTL 过期不补播、串行防重入）。
+  - 异常路径统一用 `llm_error` 回 idle；任意状态 `user_interrupt → listening`
+    （补齐状态机转换表），保证模型故障或用户插话都不会让数字人卡死。
+  - 具身 composition root 唯一落在 `apps/daemon/src/embodied.ts`；
+    `packages/*` 不得 import 平台实现；状态发布通道只有一个，避免 seq 回退。
+  - 自动验收必须以「生产 composition root + 确定性 fake reply + 真实宿主窗口 +
+    静默 TTS」为准，禁止用手工 `setState` 逐个驱动状态来冒充对话驱动。
+- 理由：把「谁负责状态」收敛到一层，才能让 0.2-②③ 成果被真实对话复用，
+  同时让 Omarchy / macOS 两套宿主共用同一套行为契约与验收脚本。
+- 代价：状态机新增两类事件，既有单测需补异常路径覆盖（已补 2 项）。
+- 状态：已接受（2026-11-15，随 0.2 五步路线收尾，v0.2.0）

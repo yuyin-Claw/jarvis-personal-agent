@@ -3,7 +3,7 @@
 本项目的显著变更记录在此。格式参照 [Keep a Changelog](https://keepachangelog.com/zh-CN/1.1.0/)，
 版本号遵循 [SemVer](https://semver.org/lang/zh-CN/)。
 
-## [Unreleased] — 0.2 Embodied Conversational Agent
+## [0.2.0] - 2026-11-15 — Embodied Conversational Agent
 
 ### 新增（0.2-① 状态引擎）
 - `@jarvis/avatar`：AvatarStateEngine 六状态机（idle/listening/thinking/speaking/
@@ -43,12 +43,36 @@
   探测命令；Core 不再直接 import 平台实现
 - 自包含 guest 验证包 `~/Omarchy/jarvis-omarchy-probe/`（9p 共享目录）
 
+### 新增（0.2-④⑤ 对话连接 + 主动交流）
+- `@jarvis/embodied`（平台无关编排层）：
+  - `EmbodiedConversation`——把一轮输入编成完整表现弧
+    `idle → listening → thinking → [working → responding] → speaking → idle`；
+    流式增量驱动强度波动、任务分支接 Harness 事件、打断立即停 TTS 且不播报旧结果、
+    `onPhase` 异步暂停点供自动验收在每个状态截图（业务代码零改动）
+  - `ProactiveVoiceChannel`——主动通知 → 数字人开口；只在 idle 播报，忙时排队
+    （high 插队 / 队列上限 / TTL 过期不补播 / 公告串行防重入），关闭语音时降级不丢消息
+- `AvatarStateEngine` 补 `llm_error`（任意状态回 idle，防卡在 thinking）与
+  任意状态 `user_interrupt → listening` 转换
+- `apps/daemon/src/embodied.ts`：具身运行时 composition root，唯一发布通道为
+  `PlatformAdapter.avatarHost`；TaskEventWatcher 把任务状态 diff 映射到 working/responding
+- CLI 新增 `jarvis talk`（流式对话 + 数字人 + 语音，支持无窗口/静音/静默合成）；
+  `jarvis-daemon` 接入主动开口、空闲 30 分钟问候、平台感知与平台通知通道
+- 自动验收 `packages/embodied/scripts/verify-embodied.sh`：生产 composition root +
+  确定性 fake reply + 真实窗口截图 + 静默 `say` 合成，覆盖回答/任务/打断/故障/
+  主动交流/排队补播，并用像素断言核对六状态真实上屏
+
 ### 修复
 - 首版宿主把 JSON 文本直接插入 `JSON.parse()` 且 FIFO 读端一次性关闭，
   导致状态指令全部被吞；改为 base64 注入 + 状态文件轮询
+- 具身运行时 `voice=false` 时仍会调用 TTS；改为静音 speaker 由编排层补齐 `tts_end`，
+  状态弧仍完整回落 idle
 
 ### 验收
-- 186/186 测试通过；六状态端到端渲染验收通过（帧 106→394，橙/绿/紫主色实测上屏）
+- **210/210 测试通过**（新增 embodied 17 项、composition root 5 项、状态机异常路径 2 项）
+- 六状态端到端渲染验收通过（帧 106→394，橙/绿/紫主色实测上屏）
+- 0.2-④⑤ 具身对话端到端验收通过：六状态由**对话链路**驱动上屏（帧 88→452），
+  配色/帧差全部 PASS，打断不播报旧结果、故障回落 idle、主动开口与排队补播正确，
+  `say` 静默合成 43KB AIFF；`jarvis talk` 真实 GLM 单轮问答通过
 - `packages/voice/scripts/verify-tts.sh`：`say` 真实合成 AIFF（39KB，不发声）、
   状态轨迹 listening>thinking>speaking>idle、tts 事件齐备、识别权限探测通过
 - `node apps/daemon/dist/cli.js platform` 实测：macOS 四端点 ready、

@@ -5,9 +5,14 @@
  * 用法：
  *   jarvis                  # 新会话交互模式
  *   jarvis --continue       # 继续最近会话
- *   jarvis ask "问题"        # 单次问答
+ *   jarvis ask "问题"        # 单次问答（Orchestrator 决策 + Harness）
+ *   jarvis talk "问题"       # 具身对话：数字人 + 语音 + 流式对话链路
+ *   jarvis talk             # 具身对话交互模式
  *   jarvis tasks            # 任务列表
  *   jarvis platform         # 平台适配器五端点状态（macOS / Omarchy）
+ *
+ * talk 环境变量：JARVIS_TALK_NO_AVATAR=1 关闭窗口、JARVIS_TALK_NO_VOICE=1 关闭语音、
+ * JARVIS_TALK_OUTPUT_FILE=<aiff> 静默合成到文件（自动验收用）。
  *
  * 环境变量见 config.ts。Ctrl+C 退出（状态已持久化，重进 --continue 恢复）。
  */
@@ -244,6 +249,63 @@ async function main(): Promise<void> {
       }
     }
     memory.close();
+    return;
+  }
+
+  // ---- 具身对话（0.2-④）：数字人状态机 + 语音 + Core 流式对话链路 ----
+  if (args[0] === "talk") {
+    const { createEmbodiedRuntime } = await import("./embodied.js");
+    const talkConvId = conversation.newConversation("具身对话");
+    const runtime = createEmbodiedRuntime({
+      platform,
+      tasks,
+      reply: async (text, hooks) => {
+        const r = await conversation.receive(
+          { conversationId: talkConvId, text },
+          {
+            onDelta: (t) => hooks.onDelta?.(t),
+            onMemoryInjected: (hits) => hooks.onMemoryInjected?.(hits.length),
+          },
+        );
+        return { kind: "answer", text: r.assistantText };
+      },
+      speechOutputFile: process.env.JARVIS_TALK_OUTPUT_FILE,
+      avatar: process.env.JARVIS_TALK_NO_AVATAR !== "1",
+      voice: process.env.JARVIS_TALK_NO_VOICE !== "1",
+    });
+    try {
+      await runtime.start();
+    } catch (err) {
+      console.log(`〔宿主不可用，降级为无窗口模式〕${err instanceof Error ? err.message : String(err)}`);
+    }
+    console.log(`JARVIS 具身对话 · ${config.model} · 平台 ${platform.id} · Ctrl+C 退出`);
+
+    const single = args.slice(1).join(" ").trim();
+    const show = (r: { ok: boolean; state: string; text: string; error?: string }) => {
+      console.log(`〔${r.ok ? "完成" : "失败"} · ${r.state}〕${r.text || r.error || ""}`);
+    };
+    try {
+      if (single) {
+        const r = await runtime.conversation.submit(single);
+        show(r);
+        if (!r.ok) process.exitCode = 1;
+      } else {
+        const rl = readline.createInterface({ input, output });
+        try {
+          for (;;) {
+            const text = (await rl.question("\n你> ")).trim();
+            if (!text) continue;
+            if (text === "exit" || text === "quit") break;
+            show(await runtime.conversation.submit(text));
+          }
+        } finally {
+          rl.close();
+        }
+      }
+    } finally {
+      await runtime.stop();
+      memory.close();
+    }
     return;
   }
 

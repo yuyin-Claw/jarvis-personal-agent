@@ -110,6 +110,35 @@ describe("AvatarStateEngine 状态机", () => {
       vi.useRealTimers();
     }
   });
+  it("llm_error：生成失败时任意非 idle 状态立即回 idle，不卡死", () => {
+    const paths: CoreEvent[][] = [
+      [{ type: "user_speech_start" }, { type: "user_speech_end" }], // thinking
+      [{ type: "user_speech_start" }, { type: "user_speech_end" }, { type: "harness_start" }], // working
+      [{ type: "user_speech_start" }, { type: "user_speech_end" }, { type: "harness_start" }, { type: "harness_end", ok: true }], // responding
+      [{ type: "user_speech_start" }, { type: "user_speech_end" }, { type: "llm_response_done" }], // speaking
+      [{ type: "proactive_notice" }], // 主动开口中说错话
+    ];
+    for (const path of paths) {
+      const e = new AvatarStateEngine({ now: () => 1, setTimeoutImpl: () => 0 });
+      for (const ev of path) e.dispatch(ev);
+      expect(e.aesthetic.state).not.toBe("idle");
+      expect(run(e, [{ type: "llm_error" }]).at(-1)).toBe("idle");
+    }
+  });
+
+  it("user_interrupt：思考/执行/回应/播报中打断都转聆听", () => {
+    const paths: CoreEvent[][] = [
+      [{ type: "user_speech_start" }, { type: "user_speech_end" }],
+      [{ type: "user_speech_start" }, { type: "user_speech_end" }, { type: "harness_start" }],
+      [{ type: "user_speech_start" }, { type: "user_speech_end" }, { type: "llm_response_done" }],
+      [{ type: "proactive_notice" }],
+    ];
+    for (const path of paths) {
+      const e = new AvatarStateEngine({ now: () => 1, setTimeoutImpl: () => 0 });
+      for (const ev of path) e.dispatch(ev);
+      expect(run(e, [{ type: "user_interrupt" }]).at(-1)).toBe("listening");
+    }
+  });
 });
 
 describe("事件桥", () => {

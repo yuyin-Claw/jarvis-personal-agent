@@ -10,12 +10,15 @@
     { "path": "../../adapters/macos" },
     { "path": "../../adapters/omarchy" },
     { "path": "../../adapters/platform" },
+    { "path": "../../packages/avatar" },
     { "path": "../../packages/context-engine" },
+    { "path": "../../packages/embodied" },
     { "path": "../../packages/harness-runtime" },
     { "path": "../../packages/llm-gateway" },
     { "path": "../../packages/memory" },
     { "path": "../../packages/orchestrator" },
     { "path": "../../packages/runtime" },
-    { "path": "../../packages/task-manager" }
+    { "path": "../../packages/task-manager" },
+    { "path": "../../packages/voice" }
   ]
 }

@@ -28,6 +28,7 @@ export type CoreEvent =
   | { type: "harness_end"; ok: boolean } // Harness 结束
   | { type: "task_completed" } // 任务完成（回应时刻）
   | { type: "proactive_notice" } // 主动通知（数字人主动开口）
+  | { type: "llm_error" } // 生成失败：任意状态立即回 idle，避免卡在 thinking
   | { type: "activity_timeout" }; // 空闲超时（引擎内部定时驱动）
 
 /** 状态转换表：current × event → next */
@@ -38,36 +39,46 @@ const TRANSITIONS: Partial<Record<AvatarState, Partial<Record<CoreEvent["type"],
     llm_request_start: "thinking",
     tts_start: "speaking",
     harness_start: "working",
+    llm_error: "idle",
+    user_interrupt: "listening",
   },
   listening: {
     user_speech_end: "thinking", // 说完默认进入理解（由对话层接管）
     user_interrupt: "listening", // 打断后仍在聆听
     llm_request_start: "thinking",
     tts_start: "speaking",
+    llm_error: "idle",
   },
   thinking: {
     llm_response_done: "speaking", // 有话要说（TTS 随后启动）
     tts_start: "speaking",
     harness_start: "working", // 决策为执行任务
     user_speech_start: "listening", // 用户补充打断思考
+    user_interrupt: "listening",
+    llm_error: "idle",
   },
   speaking: {
     user_interrupt: "listening", // 打断：立即停 TTS 切聆听
     tts_end: "idle",
     harness_start: "working", // 边说边启动执行
     user_speech_start: "listening",
+    llm_error: "idle",
   },
   working: {
     harness_end: "responding",
     task_completed: "responding",
     user_speech_start: "listening", // 用户随时可插话
     proactive_notice: "working", // 工作中收到通知保持工作（不打断表现）
+    user_interrupt: "listening",
+    llm_error: "idle",
   },
   responding: {
     tts_start: "speaking", // 播报结果
     user_speech_start: "listening",
     harness_start: "working", // 连续任务
     activity_timeout: "idle",
+    user_interrupt: "listening",
+    llm_error: "idle",
   },
 };
 

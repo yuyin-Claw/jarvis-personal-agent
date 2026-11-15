@@ -13,6 +13,7 @@
     { "path": "apps/daemon" },
     { "path": "packages/avatar" },
     { "path": "packages/context-engine" },
+    { "path": "packages/embodied" },
     { "path": "packages/harness-runtime" },
     { "path": "packages/llm-gateway" },
     { "path": "packages/memory" },
