@@ -9,6 +9,7 @@
  *   jarvis talk "问题"       # 具身对话：数字人 + 语音 + 流式对话链路
  *   jarvis talk             # 具身对话交互模式
  *   jarvis tasks            # 任务列表
+ *   jarvis capabilities [list|run|health|register|enable|disable]  # 能力注册表（0.4）
  *   jarvis platform         # 平台适配器五端点状态（macOS / Omarchy）
  *
  * talk 环境变量：JARVIS_TALK_NO_AVATAR=1 关闭窗口、JARVIS_TALK_NO_VOICE=1 关闭语音、
@@ -27,6 +28,7 @@ import { SqliteMemoryEngine } from "@jarvis/memory";
 import { SqliteTaskManager } from "@jarvis/task-manager";
 import { Orchestrator } from "@jarvis/orchestrator";
 import { CodingHarness, PermissionBroker, type AuditEntry } from "@jarvis/harness-runtime";
+import { CapabilityRegistry, SkillRunner } from "@jarvis/capability-registry";
 import { ContextEngine } from "@jarvis/context-engine";
 import type { AwarenessSource } from "@jarvis/context-engine";
 import { ConversationGateway } from "./gateway.js";
@@ -44,6 +46,69 @@ async function main(): Promise<void> {
     console.log(`JARVIS 平台适配器：${platform.id}`);
     for (const s of statuses) {
       console.log(`  ${s.endpoint.padEnd(14)} ${s.state.padEnd(12)} ${s.detail ?? ""}`);
+    }
+    return;
+  }
+
+  // ---- 能力注册表（ADR-011 · 0.4）----
+  if (args[0] === "capabilities") {
+    const sub = args[1] ?? "list";
+    const skillsRoot = process.env.JARVIS_SKILLS_ROOT
+      ?? path.join(os.homedir(), ".local/share/jarvis/skills");
+    const dbPath = process.env.JARVIS_CAP_DB
+      ?? path.join(os.homedir(), ".local/share/jarvis/capabilities.db");
+    const registry = new CapabilityRegistry({ dbPath, skillsRoot });
+    try {
+      if (sub === "list") {
+        const caps = registry.list({ enabledOnly: args[2] !== "--all" });
+        if (caps.length === 0) {
+          console.log(`（无已${args[2] === "--all" ? "注册" : "启用"}能力；skillsRoot=${skillsRoot}）`);
+        } else {
+          console.log("能力名            版本     kind      状态   健康       说明");
+          for (const c of caps) {
+            const flag = c.enabled ? "启用" : "停用";
+            console.log(`${c.name.padEnd(16)} ${c.version.padEnd(8)} ${c.kind.padEnd(9)} ${flag.padEnd(5)} ${c.health.padEnd(10)} ${c.description.slice(0, 40)}`);
+          }
+        }
+      } else if (sub === "run" && args[2]) {
+        // jarvis capabilities run <name> [json-arg]
+        let inputArg: unknown = {};
+        if (args[3]) { try { inputArg = JSON.parse(args[3]); } catch { console.error("输入参数不是合法 JSON"); process.exit(1); } }
+        const manifest = registry.loadManifest(args[2]);
+        if (!manifest) { console.error(`Skill 不存在：${args[2]}（skillsRoot=${skillsRoot}）`); process.exit(1); }
+        const r = await new SkillRunner(skillsRoot).run(args[2], inputArg);
+        console.log(JSON.stringify(r.output, null, 2));
+        if (r.rc !== 0) console.error(`（rc=${r.rc}，${r.durationMs}ms）${r.stderr.slice(0, 200)}`);
+      } else if (sub === "health" && args[2]) {
+        const h = await registry.healthCheck(args[2]);
+        console.log(`${args[2]}: ${h}`);
+      } else if (sub === "register") {
+        // 扫描 skillsRoot 下全部 skill.json 批量注册
+        const fs = await import("node:fs");
+        if (!fs.existsSync(skillsRoot)) { console.error(`skillsRoot 不存在：${skillsRoot}`); process.exit(1); }
+        const dirs = fs.readdirSync(skillsRoot, { withFileTypes: true }).filter((d) => d.isDirectory());
+        let n = 0;
+        for (const d of dirs) {
+          const m = registry.loadManifest(d.name);
+          if (!m) { console.log(`跳过 ${d.name}（无 skill.json）`); continue; }
+          const rec = registry.register({
+            name: m.name, version: m.version, kind: "skill",
+            entry: d.name, description: m.description ?? "",
+          });
+          console.log(`注册 ${rec.name}@${rec.version}（权限：${rec.permissions.length} 项）`);
+          n++;
+        }
+        console.log(`共注册 ${n} 个能力`);
+      } else if (sub === "enable" || sub === "disable") {
+        if (!args[2]) { console.error("用法：capabilities enable|disable <name> <version>"); process.exit(1); }
+        const ok = registry.setEnabled(args[2], args[3] ?? "*", sub === "enable");
+        console.log(ok ? "已更新" : "未找到该能力");
+      } else {
+        console.error("用法：jarvis capabilities [list --all | run <name> '<json>' | health <name> | register | enable|disable <name> <version>]");
+        process.exit(1);
+      }
+    } finally {
+      registry.close();
     }
     return;
   }

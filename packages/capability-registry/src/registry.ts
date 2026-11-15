@@ -71,7 +71,13 @@ export class CapabilityRegistry {
       (name, version, kind, entry, description, enabled, permissions, created_at, health)
       VALUES (?, ?, ?, ?, ?, 1, '[]', ?, 'unknown')`)
       .run(input.name, input.version, input.kind, input.entry, input.description ?? "", now);
-    return this.get(input.name, input.version)!;
+    // 刚插入的行必然可查回（同事务语义）；防御式处理并发删除的极端情形
+    return this.get(input.name, input.version)
+      ?? {
+        name: input.name, version: input.version, kind: input.kind,
+        entry: input.entry, description: input.description ?? "",
+        enabled: 1, permissions: [], created_at: now, health: "unknown",
+      };
   }
 
   get(name: string, version: string): CapabilityRecord | undefined {

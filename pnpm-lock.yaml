@@ -83,6 +83,9 @@ importers:
       '@jarvis/avatar':
         specifier: workspace:*
         version: link:../../packages/avatar
+      '@jarvis/capability-registry':
+        specifier: workspace:*
+        version: link:../../packages/capability-registry
       '@jarvis/context-engine':
         specifier: workspace:*
         version: link:../../packages/context-engine

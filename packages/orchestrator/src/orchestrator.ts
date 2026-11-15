@@ -15,7 +15,8 @@ export type DecisionType =
   | "answer" // 直接回答（无需任务）
   | "ask" // 追问用户（信息不足）
   | "create_task" // 创建任务委派 Harness（0.1 尚无 Harness 时也可建任务挂起）
-  | "continue_task"; // 继续既有任务
+  | "continue_task" // 继续既有任务
+  | "capability_gap"; // 能力缺口：用户诉求超出已注册能力（ADR-011 0.4 分支）
 
 export interface Decision {
   type: DecisionType;
@@ -25,6 +26,15 @@ export interface Decision {
   task?: { title: string; goal: string; requiresApproval: boolean };
   /** continue_task 时 */
   taskId?: string;
+  /** capability_gap 时：缺口报告（供审批与 Factory 开发依据） */
+  gap?: {
+    /** 用户诉求的一句话描述 */
+    need: string;
+    /** 建议的能力形态（skill/harness/tool/...） */
+    suggestedKind: string;
+    /** 建议能力名（kebab-case，供 Factory 生成骨架） */
+    suggestedName: string;
+  };
 }
 
 /** 单轮处理产出 */
@@ -44,6 +54,8 @@ export interface OrchestratorOptions {
   systemPrompt: string;
   /** 可选：环境上下文供给（context-engine 注入；无则决策不感知环境） */
   contextProvider?: () => Array<{ app: string; hits: number }>;
+  /** 可选：已注册能力清单（capability-registry 注入；无则不判定能力缺口） */
+  capabilitiesProvider?: () => Array<{ name: string; kind: string; description: string; enabled: boolean }>;
 }
 
 /** 意图判定提示词（严格 JSON 输出）；记忆块供回答时引用 */
@@ -52,6 +64,7 @@ function intentPrompt(
   openTasks: AgentTask[],
   memoryBlock?: string,
   envBlock?: string,
+  capsBlock?: string,
 ): string {
   const openList =
     openTasks.length === 0
@@ -66,8 +79,11 @@ function intentPrompt(
   const envSection = envBlock
     ? `\n用户当前环境（最近使用中的应用，仅供参考，用户未提及时不要主动展开）：\n${envBlock}\n`
     : "";
+  const capsSection = capsBlock
+    ? `\n已注册能力（JARVIS 当前会做的）：\n${capsBlock}\n`
+    : "";
   return `分析用户输入，决定下一步动作。只输出 JSON，不要输出其他内容。
-${memorySection}${envSection}
+${memorySection}${envSection}${capsSection}
 进行中任务：
 ${openList}
 
@@ -78,12 +94,14 @@ ${openList}
 {"type":"ask","text":"..."}                           — 追问（信息不足以行动，一次最多 1-2 个问题）
 {"type":"create_task","text":"...","task":{"title":"...","goal":"...","requiresApproval":false}} — 委派开发/执行类工作
 {"type":"continue_task","text":"...","taskId":"..."}  — 用户想继续上述进行中任务之一
+{"type":"capability_gap","text":"...","gap":{"need":"...","suggestedKind":"skill","suggestedName":"kebab-case-name"}} — 用户要求一个具体动作，但已注册能力清单完全覆盖不了（需先经用户批准再开发）
 
 判断规则：
 - 涉及删除、支付、系统级变更、发送给他人 → requiresApproval=true
 - 模糊指代（"继续"、"刚才那个"）且无进行中任务 → ask 澄清
 - 长期记忆中有能回答用户问题的内容时，在 text 中使用它
 - 用户说"这个/刚才那个文件"等指代时，可结合环境上下文推断
+- 只有当用户诉求是一个"可执行动作"且已注册能力清单（若有）完全无法完成时才用 capability_gap；纯问答永远 answer
 - text 字段始终是面向用户的话（中文）`;
 }
 
@@ -94,6 +112,7 @@ export class Orchestrator {
   private readonly model: string;
   private readonly systemPrompt: string;
   private readonly contextProvider: OrchestratorOptions["contextProvider"];
+  private readonly capabilitiesProvider: OrchestratorOptions["capabilitiesProvider"];
 
   constructor(opts: OrchestratorOptions) {
     this.gateway = opts.gateway;
@@ -102,6 +121,7 @@ export class Orchestrator {
     this.model = opts.model;
     this.systemPrompt = opts.systemPrompt;
     this.contextProvider = opts.contextProvider;
+    this.capabilitiesProvider = opts.capabilitiesProvider;
   }
 
   /** 主决策循环（每轮一次 LLM 意图判定；有限，无循环工具调用） */
@@ -120,6 +140,11 @@ export class Orchestrator {
       envApps.length > 0
         ? envApps.map((a) => `- ${a.app}（${a.hits} 次）`).join("\n")
         : undefined;
+    const caps = (this.capabilitiesProvider?.() ?? []).filter((c) => c.enabled);
+    const capsBlock =
+      caps.length > 0
+        ? caps.map((c) => `- ${c.name}（${c.kind}）：${c.description || "无描述"}`).join("\n")
+        : undefined;
 
     // 2. Understand intent（结构化输出）
     const messages: ChatMessage[] = [
@@ -130,11 +155,11 @@ export class Orchestrator {
     }
     messages.push({
       role: "user",
-      content: intentPrompt(userText, openTasks, memoryBlock, envBlock),
+      content: intentPrompt(userText, openTasks, memoryBlock, envBlock, capsBlock),
     });
 
     const res = await this.gateway.generate({ model: this.model, messages });
-    const decision = this.parseDecision(res.content);
+    const decision = this.parseDecision(res.content, userText);
 
     // 3. Execute
     let task: AgentTask | undefined;
@@ -175,7 +200,7 @@ export class Orchestrator {
   }
 
   /** 解析模型输出为 Decision（容错：剥 markdown 围栏、截 JSON 对象） */
-  private parseDecision(raw: string): Decision {
+  private parseDecision(raw: string, userTextRaw: string): Decision {
     let text = raw.trim();
     const fence = text.match(/```(?:json)?\s*([\s\S]*?)```/);
     if (fence?.[1]) text = fence[1].trim();
@@ -213,6 +238,18 @@ export class Orchestrator {
             text: String(obj.text ?? "继续该任务。"),
             taskId: obj.taskId ? String(obj.taskId) : undefined,
           };
+        case "capability_gap": {
+          const g = (obj as { gap?: { need?: string; suggestedKind?: string; suggestedName?: string } }).gap ?? {};
+          return {
+            type: "capability_gap",
+            text: String(obj.text ?? "我目前还不会这件事，可以为你申请开发这个能力。"),
+            gap: {
+              need: String(g.need ?? userTextRaw),
+              suggestedKind: String(g.suggestedKind ?? "skill"),
+              suggestedName: String(g.suggestedName ?? "unnamed-capability"),
+            },
+          };
+        }
         default:
           return { type: "answer", text: raw.trim() };
       }

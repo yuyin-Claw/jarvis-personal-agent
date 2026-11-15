@@ -21,6 +21,7 @@
     "@jarvis/context-engine": "workspace:*",
     "@jarvis/embodied": "workspace:*",
     "@jarvis/harness-runtime": "workspace:*",
+    "@jarvis/capability-registry": "workspace:*",
     "@jarvis/llm-gateway": "workspace:*",
     "@jarvis/memory": "workspace:*",
     "@jarvis/orchestrator": "workspace:*",
