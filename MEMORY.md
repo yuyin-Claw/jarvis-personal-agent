@@ -92,3 +92,20 @@ JARVIS 0.1 验收三场景：①委派任务自动调度 Harness 完成并汇报
 - 打断语义断言已移植进 verify-omarchy-voice.mjs 5c 节（guest 实测通过）
 - 复验：全量 build/lint/226 测试绿；core 21/21、runtime 11/11、
   render/embodied/tts、guest avatar、guest voice（含打断）全部 PASS
+
+## Core 进驻 Omarchy + 语音引擎本地化（2026-11-15 下午，用户选定方向 1+2）
+
+- JARVIS 全栈三 unit 在 Omarchy guest 内 systemd 常驻并开机自启：
+  jarvis-voice（语音服务）+ jarvis-avatar（数字人窗口）+ jarvis-core（Core daemon）
+- 部署链：deploy-core.mjs（宿主 pnpm build → tar 经 9p → guest 本地磁盘
+  npm install（better-sqlite3 12.11.1 aarch64 现场编译）+ @jarvis/* symlink）
+- 关键坑：npm 不认 pnpm workspace:*（tsconfig extends 失效 → CJS 输出）；
+  better-sqlite3 11.x 不兼容 node 26（升级 12.11.1）；9p 上 symlink 异常
+  （部署到本地磁盘）；guest 代理长命令转义损耗（复杂逻辑落 sh 文件执行）
+- 语音引擎完全本地化：ASR = whisper.cpp（guest 内源码编译 whisper-cli +
+  ggml-base 147MB，643ms/次）；TTS = piper aarch64 + zh_CN-huayan-medium
+  神经音色（211ms/次）；piper -f 是输出参数，文本必须走 stdin（已修
+  backends.mjs 并固化）
+- 全栈验收 6/6：三 unit active、引擎全本地、fixture ASR、guest 内真实
+  GLM 对话、Core 驱动数字人窗口、piper 合成落盘
+- GLM key 经 9p jarvis-core.env 注入 guest（JARVIS_ENV_FILE）

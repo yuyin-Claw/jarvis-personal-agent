@@ -110,14 +110,22 @@ node adapters/omarchy/scripts/verify-omarchy-voice.mjs
 生产部署（ADR-010：JARVIS 系统栈开机自启动——系统启动数字人即就位）：
 
 ```sh
-# 一键安装 = 语音服务 + 数字人窗口双 systemd --user unit + Hyprland 窗口规则
-#   jarvis-voice  → default.target（无图形也常驻，崩溃自动重启）
+# Core 部署（宿主执行一次：宿主编译 dist + guest 装运行依赖 + @jarvis 链接）
+node adapters/omarchy/scripts/deploy-core.mjs
+
+# 一键安装 = 三 systemd --user unit + Hyprland 窗口规则
+#   jarvis-voice  → default.target（语音服务，崩溃自动重启）
 #   jarvis-avatar → graphical-session.target（登录即数字人就位）
+#   jarvis-core   → default.target（对话/记忆/任务/调度，Requires voice）
 sh apps/voice-service/deploy/install.sh
 
 # 生产形态端到端验收（15 断言）：双 unit / kill -9 自愈 / 浮动窗口六状态像素断言
 node adapters/omarchy/scripts/verify-omarchy-production.mjs
 ```
+
+语音引擎已完全本地化（Omarchy 内，无云端依赖）：
+- **ASR**：whisper.cpp + ggml-base（guest 内 643ms 转写，engine=whisper.cpp / guest-local）
+- **TTS**：piper 神经音色 zh_CN-huayan-medium（211ms 合成，自然中文音色替代 espeak-ng 机器音）
 
 Core 内 `MacSayTTS` / `SpeechInput` 仅作为 macOS 适配器（`adapters/macos`）的
 开发验证台实现；服务化路径下 Core 不绑定任何语音引擎。语音识别授权未就绪时

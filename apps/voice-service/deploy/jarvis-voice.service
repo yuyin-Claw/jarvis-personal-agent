@@ -12,9 +12,13 @@ ConditionUser=!root
 Type=simple
 WorkingDirectory=%h/Omarchy/jarvis-voice-service
 # espeak-ng 为无 root 安装到 ~/.local，需显式带库与数据路径
-Environment=PATH=%h/.local/espeak/usr/bin:/usr/local/bin:/usr/bin:/bin
-Environment=LD_LIBRARY_PATH=%h/.local/espeak/usr/lib
-Environment=ESPEAK_DATA_PATH=%h/.local/espeak/usr/share/espeak-ng-data
+Environment=PATH=%h/.local/share/whisper.cpp/build/bin:%h/.local/share/piper:%h/.local/espeak/usr/bin:/usr/local/bin:/usr/bin:/bin
+Environment=LD_LIBRARY_PATH=%h/.local/share/piper:%h/.local/espeak/usr/lib
+Environment=ESPEAK_DATA_PATH=%h/.local/espeak/usr/share/espeak-ng-data:%h/.local/share/piper/espeak-ng-data
+# 本地 ASR：whisper.cpp（完全离线，优先于 superwhisper 云端路径）
+Environment=JARVIS_WHISPER_CPP_MODEL=%h/.local/share/whisper-models/ggml-base.bin
+# 本地 TTS：piper 神经音色（zh_CN huayan medium，优于 espeak-ng 机器音）
+Environment=JARVIS_PIPER_MODEL=%h/.local/share/piper-voices/zh_CN-huayan-medium.onnx
 ExecStart=/usr/bin/node src/server.mjs --backend omarchy --port 8787
 Restart=on-failure
 RestartSec=2

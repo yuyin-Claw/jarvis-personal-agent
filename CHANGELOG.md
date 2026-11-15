@@ -32,6 +32,18 @@
 - `verify-omarchy-production.mjs`：生产形态 15 断言全过——双 unit enabled/active、
   kill -9 后自动拉起、Core 经生产服务 ASR/TTS、浮动窗口六状态区域截图像素断言
 
+### 新增（Core 进驻 Omarchy + 语音引擎本地化）
+- `deploy-core.mjs`：宿主编译 dist → guest 本地磁盘安装（~/.../jarvis/core），
+  npm 装运行依赖（better-sqlite3 aarch64 现场编译）+ @jarvis/* symlink
+- `jarvis-core.service`：Core daemon systemd --user 常驻（Requires jarvis-voice）；
+  install.sh 扩为三 unit；guest 内 jarvis talk 真实 GLM 闭环、五端点全 ready
+- better-sqlite3 ^11.10.0 → ^12.11.1（node 26 V8 API 兼容）
+- 语音引擎完全本地化：ASR whisper.cpp（guest 编译 + ggml-base，643ms 转写，
+  优先于 superwhisper 云端）；TTS piper（zh_CN-huayan-medium 神经音色，211ms，
+  修复 piper CLI -f 参数误用：文本走 stdin）
+- 全栈验收 6/6：三 unit active / 引擎全本地 / fixture 转写 / guest 内 GLM
+  对话 / Core 驱动数字人 / piper 合成
+
 ### 验收
 - guest 内 superwhisper ASR 真实识别 fixture「请介绍一下你自己。」与
   「等一下，我有个问题。」；espeak-ng 真实合成 203KB WAV；

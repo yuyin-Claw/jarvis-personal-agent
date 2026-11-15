@@ -1,0 +1,28 @@
+# JARVIS Core daemon —— systemd --user unit（Omarchy 生产形态）
+# 安装：~/.config/systemd/user/jarvis-core.service（由 install.sh 完成）
+# 开机自启（default.target）；语音服务之后有序拉起；崩溃自动重启。
+#
+# ADR-010：JARVIS 系统栈 = jarvis-voice + jarvis-avatar + jarvis-core。
+
+[Unit]
+Description=JARVIS Core daemon（对话/记忆/任务/调度，Omarchy 内自治运行）
+After=network-online.target jarvis-voice.service
+Wants=network-online.target
+Requires=jarvis-voice.service
+
+[Service]
+Type=simple
+WorkingDirectory=%h/.local/share/jarvis/core
+Environment=JARVIS_ENV_FILE=/mnt/mac/jarvis-core.env
+# 语音端点指向本机 systemd 常驻的 jarvis-voice
+Environment=JARVIS_VOICE_URL=http://127.0.0.1:8787
+# 数字人窗口为本机 jarvis-avatar（Omarchy 适配器经本地 socket 驱动）
+Environment=JARVIS_PLATFORM=omarchy
+ExecStart=/home/yuyin/.local/share/mise/shims/node apps/daemon/dist/daemon.js
+Restart=on-failure
+RestartSec=3
+StandardOutput=journal
+StandardError=journal
+
+[Install]
+WantedBy=default.target

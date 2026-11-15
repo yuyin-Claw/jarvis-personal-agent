@@ -186,10 +186,15 @@ export class OmarchyBackend extends BaseBackend {
       const safe = clean.startsWith("-") ? ` ${clean}` : clean;
       if (this.piper) {
         const model = this.env.JARVIS_PIPER_MODEL ?? "";
-        const textFile = path.join(d, "text.txt");
-        fs.writeFileSync(textFile, safe);
-        await run(this.piper, ["--model", model, "-f", textFile, "--output_file", out],
-          { timeout: 60_000, maxBuffer: 4 * 1024 * 1024 });
+        // piper CLI：文本经 stdin，-f 是输出文件参数（不是输入文件）
+        const { execFile } = await import("node:child_process");
+        await new Promise((resolve, reject) => {
+          const p = execFile(this.piper,
+            ["--model", model, "-f", out],
+            { timeout: 120_000, maxBuffer: 4 * 1024 * 1024 },
+            (e2) => (e2 ? reject(e2) : resolve()));
+          p.stdin?.end(safe);
+        });
       } else {
         await run(this.espeak, ["-v", "zh", "-s", String(opts.rate ?? 150), "-w", out, safe], { timeout: 60_000 });
       }
