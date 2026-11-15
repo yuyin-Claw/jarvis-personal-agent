@@ -6,6 +6,7 @@
  */
 import { detectPlatformId, registerPlatform, resolvePlatform } from "@jarvis/platform";
 import type { AdapterId, PlatformAdapter } from "@jarvis/platform";
+import { withVoiceService } from "./voice-service.js";
 
 export async function initPlatform(id: AdapterId = detectPlatformId()): Promise<PlatformAdapter> {
   if (id === "macos") {
@@ -15,5 +16,9 @@ export async function initPlatform(id: AdapterId = detectPlatformId()): Promise<
     const { OmarchyPlatformAdapter } = await import("@jarvis/adapter-omarchy");
     registerPlatform("omarchy", () => new OmarchyPlatformAdapter());
   }
-  return resolvePlatform(id);
+  const platform = await resolvePlatform(id);
+  // ADR-009：语音能力服务化。设置 JARVIS_VOICE_URL 即把两个语音端点切到
+  // 独立语音服务进程（可运行在 Omarchy guest 内），其余平台端点不变。
+  const voiceUrl = process.env.JARVIS_VOICE_URL;
+  return voiceUrl ? withVoiceService(platform, { url: voiceUrl }) : platform;
 }

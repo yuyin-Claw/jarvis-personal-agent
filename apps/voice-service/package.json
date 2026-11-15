@@ -1,0 +1,12 @@
+{
+  "name": "@jarvis/voice-service",
+  "version": "0.1.0",
+  "private": true,
+  "license": "MIT",
+  "type": "module",
+  "description": "JARVIS 语音服务：平台无关的 TTS/ASR HTTP 契约（零 macOS 依赖，面向 Linux/Omarchy，未来独立拆分）",
+  "main": "./src/server.mjs",
+  "scripts": {
+    "start": "node src/server.mjs"
+  }
+}
