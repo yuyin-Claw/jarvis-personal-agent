@@ -571,6 +571,24 @@ async function main(): Promise<void> {
 
   // 交互模式
   console.log(`JARVIS 0.1 · ${config.model} · 工作目录 ${workDir} · Ctrl+C 退出`);
+  // 管道输入（非 TTY）：逐行读，处理完 stdin 即退出（readline 对 EOF 后
+  // 的 question 会抛 "readline was closed"，TTY 交互才走 readline）
+  if (!input.isTTY) {
+    const chunks: string[] = [];
+    for await (const chunk of input) chunks.push(String(chunk));
+    for (const line of chunks.join("").split("\n")) {
+      const text = line.trim();
+      if (!text) continue;
+      if (text === "exit" || text === "quit") break;
+      try {
+        await ask(text);
+      } catch (err) {
+        console.error(`\n[出错] ${err instanceof Error ? err.message : String(err)}`);
+      }
+    }
+    memory.close();
+    return;
+  }
   const rl = readline.createInterface({ input, output });
   try {
     for (;;) {
