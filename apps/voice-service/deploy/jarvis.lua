@@ -13,8 +13,8 @@ o.window("jarvis-avatar-host.py", {
   -- 右下角：屏幕逻辑尺寸 - 窗口 - 边距（镜像 apps/pip.lua 的画中画位置）
   move = { "(monitor_w-window_w-40)", "(monitor_h-window_h-40)" },
   pin = true,            -- 所有工作区可见（置顶钉住）
-  noblur = true,
-  noinitialfocus = true, -- 启动不抢焦点
+  no_blur = true,
+  no_initial_focus = true, -- 启动不抢焦点（键名须下划线：官方 apps/*.lua 同款）
 })
 
 -- 透明悬浮球：显式开透明（默认 GTK 透明视觉 + WebKit 透明背景）
