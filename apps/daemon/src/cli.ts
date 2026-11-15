@@ -10,6 +10,7 @@
  *   jarvis talk             # 具身对话交互模式
  *   jarvis tasks            # 任务列表
  *   jarvis capabilities [list|run|health|register|enable|disable]  # 能力注册表（0.4）
+ *   jarvis factory [list|draft|approve|reject]   # Skill 工厂（0.4：缺口→骨架→审批→注册）
  *   jarvis platform         # 平台适配器五端点状态（macOS / Omarchy）
  *
  * talk 环境变量：JARVIS_TALK_NO_AVATAR=1 关闭窗口、JARVIS_TALK_NO_VOICE=1 关闭语音、
@@ -28,7 +29,7 @@ import { SqliteMemoryEngine } from "@jarvis/memory";
 import { SqliteTaskManager } from "@jarvis/task-manager";
 import { Orchestrator } from "@jarvis/orchestrator";
 import { CodingHarness, PermissionBroker, type AuditEntry } from "@jarvis/harness-runtime";
-import { CapabilityRegistry, SkillRunner } from "@jarvis/capability-registry";
+import { CapabilityRegistry, SkillRunner, SkillFactory } from "@jarvis/capability-registry";
 import { ContextEngine } from "@jarvis/context-engine";
 import type { AwarenessSource } from "@jarvis/context-engine";
 import { ConversationGateway } from "./gateway.js";
@@ -105,6 +106,46 @@ async function main(): Promise<void> {
         console.log(ok ? "已更新" : "未找到该能力");
       } else {
         console.error("用法：jarvis capabilities [list --all | run <name> '<json>' | health <name> | register | enable|disable <name> <version>]");
+        process.exit(1);
+      }
+    } finally {
+      registry.close();
+    }
+    return;
+  }
+
+  // ---- Harness Factory（ADR-011 · 0.4 Step 4.3）----
+  if (args[0] === "factory") {
+    const sub = args[1] ?? "list";
+    const skillsRoot = process.env.JARVIS_SKILLS_ROOT
+      ?? path.join(os.homedir(), ".local/share/jarvis/skills");
+    const dbPath = process.env.JARVIS_CAP_DB
+      ?? path.join(os.homedir(), ".local/share/jarvis/capabilities.db");
+    const registry = new CapabilityRegistry({ dbPath, skillsRoot });
+    const factory = new SkillFactory({ registry, skillsRoot });
+    try {
+      if (sub === "draft") {
+        // jarvis factory draft "<need>" <name>
+        const need = args[2];
+        const name = args[3];
+        if (!need || !name) { console.error("用法：jarvis factory draft \"<需求描述>\" <kebab-case-名>"); process.exit(1); }
+        const r = factory.draft({ need, suggestedKind: "skill", suggestedName: name });
+        console.log(`骨架已生成（staging，未注册）：`);
+        console.log(`  ${r.dir}`);
+        for (const f of r.files) console.log(`    - ${f}`);
+        console.log(`申请权限：${r.permissionRequest.length} 项（骨架恒零）`);
+        console.log(`下一步：审阅后 jarvis factory approve ${r.name}`);
+      } else if (sub === "list") {
+        const drafts = factory.listDrafts();
+        if (drafts.length === 0) console.log("（staging 无待审批骨架）");
+        else for (const d of drafts) console.log(`${d.name.padEnd(24)} ${d.need.slice(0, 40)}`);
+      } else if (sub === "approve" && args[2]) {
+        const rec = factory.approve(args[2]);
+        console.log(`已批准并注册：${rec.name}@${rec.version}（权限：${rec.permissions.length} 项）`);
+      } else if (sub === "reject" && args[2]) {
+        console.log(factory.reject(args[2]) ? `已删除骨架：${args[2]}` : `staging 无此骨架：${args[2]}`);
+      } else {
+        console.error("用法：jarvis factory [list | draft \"<需求>\" <名> | approve <名> | reject <名>]");
         process.exit(1);
       }
     } finally {
