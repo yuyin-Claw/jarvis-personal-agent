@@ -9,4 +9,4 @@
 | `zh-interrupt.wav` | 「等一下，我有个问题」 | whisper base → `等一下，我有个问题` |
 
 来源：2026-11-15 macOS 真实语音对话验收留档（AIFF → 16k WAV 转码）。
-该验收路径已随 MacBackend 一并移除；fixture 是它留给独立语音服务的唯一遗产。
+该验收路径已随 MacBackend 一并移除；fixture 由架设在 Omarchy 内的语音服务继续使用。

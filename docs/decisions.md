@@ -82,13 +82,14 @@
 - 代价：状态机新增两类事件，既有单测需补异常路径覆盖（已补 2 项）。
 - 状态：已接受（2026-11-15，随 0.2 五步路线收尾，v0.2.0）
 
-**ADR-009: 语音能力服务化——独立 HTTP 服务进程，零 macOS 依赖**
+**ADR-009: 语音能力服务化——架设在 Omarchy 系统内的语音子系统，零 macOS 依赖**
 - 场景：0.2-③ 语音链路最初直接绑 `say` / SFSpeechRecognizer（macOS），跨系统复用受阻。
   用户 2026-11-15 裁决：用 TTS/ASR 模型直接在 Omarchy 系统上架设服务；随后进一步明确
-  **语音服务未来是独立拆分项目，不得依赖任何 macOS 内容**（含开发期残留的
-  MacBackend、`/usr/bin/say` 测试音频生成等）。
+  **语音服务是架设在 Omarchy 系统里面的组成部分，不得依赖任何 macOS 内容**（含开发期
+  残留的 MacBackend、`/usr/bin/say` 测试音频生成等）。「未来拆分为独立项目」的
+  表述是记录错误，已更正：本服务从属于 JARVIS-on-Omarchy 整体，不是独立项目。
 - 决策：
-  - 新增 `apps/voice-service`（零外部依赖 Node HTTP 服务，目录可直接复制到 Omarchy guest 运行）：
+  - 新增 `apps/voice-service`（零外部依赖 Node HTTP 服务，部署在 Omarchy 系统内运行）：
     契约 v1 = `GET /health`、`GET /contract`、`POST /asr {audio: base64, format, language}`、
     `POST /tts {text, voice, rate}`；音频 base64（≤16 MiB）、文本 ≤500 字符、结构化错误、
     health 如实标注本地/上游。
@@ -100,9 +101,9 @@
   - 验收红线：测试音频一律用仓库内置 fixtures（`apps/voice-service/fixtures/*.wav`，
     真实人声 16k WAV），验收流程不得调用任何宿主专有合成工具；守卫测试固化
     「backends.mjs 无 macOS 专有引用」。
-  - 本服务独立拆分时（未来仓库）应可直接整目录搬走，不携带对 monorepo 的依赖。
-- 理由：语音引擎是可替换件；服务化让 Core 与引擎解耦、让 Omarchy guest 用本地引擎
-  实现真实语音闭环，也为独立项目化铺路。零 macOS 依赖是拆分的前提，不是可选项。
-- 代价：macOS 开发机不再有本地语音服务实现；macOS 上的语音验收改为
-  「Core 在开发机 + 语音服务在 guest」的跨系统形态（`verify-omarchy-voice.mjs`）。
-- 状态：已接受（2026-11-15 用户裁决）
+- 理由：语音引擎是可替换件；服务化让 Core 与引擎解耦、让 Omarchy 用本地引擎
+  实现真实语音闭环。零 macOS 依赖是因为该服务只活在 Omarchy 系统内——
+  macOS 上不存在它的运行形态，自然也不该有它的代码路径。
+- 代价：macOS 开发机没有本地语音服务实现；macOS 上的语音验收为
+  「Core 在开发机 + 语音服务在 Omarchy guest」的跨系统形态（`verify-omarchy-voice.mjs`）。
+- 状态：已接受（2026-11-15 用户裁决；同日更正「独立拆分」表述）

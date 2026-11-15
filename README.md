@@ -94,7 +94,7 @@ Node 侧推荐用 `AvatarRenderTransport`（`packages/avatar`）发布状态或�
 `bind(engine)` 订阅状态引擎，无需手写 seq。
 
 语音链路（0.2-③ / ADR-009）：语音能力已服务化——`apps/voice-service` 是零依赖、
-零 macOS 依赖的独立 HTTP 服务（未来拆分为独立项目），部署在 Omarchy 上：
+零 macOS 依赖的语音子系统，架设在 Omarchy 系统内（JARVIS-on-Omarchy 的组成部分）：
 
 ```sh
 # guest 内启动（ASR: superwhisper/whisper.cpp/vosk，TTS: espeak-ng/piper）

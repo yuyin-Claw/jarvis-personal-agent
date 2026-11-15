@@ -3,7 +3,7 @@
  *
  * 语音能力从 Core 中剥离为独立进程：Core 只经 Platform Adapter 的
  * speechOutput / speechInput 端点调用本服务，不绑定任何单个系统的音频框架。
- * ADR-009 红线：零 macOS 依赖（未来独立拆分项目），本地后端面向 Linux/Omarchy，
+ * ADR-009 红线：零 macOS 依赖（本服务架设在 Omarchy 系统内），本地后端面向 Linux/Omarchy，
  * 本地引擎缺失时可转发到上游服务（upstream），health 必须如实标注。
  *
  *   GET  /health   → { ok, contract, platform, asr, tts, upstream? }

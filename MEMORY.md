@@ -24,7 +24,7 @@
 | 9 | **实施基准确立（用户裁决 2026-11-15）**：0.1-0.3 已落地，保留现项目边界与技术决策不再扩大范围；可靠闭环（任务→理解→执行→验证→汇报）优先于一切扩展；Harness Factory/数字人/动态 UI 挂起不阻塞闭环 | 2026-11-15 |
 | 10 | **平台端点收归 Platform Adapter（ADR-007，用户裁决 2026-11-15）**：保留 ADR-001 独立仓库；补 `adapters/platform` 接口 + `adapters/macos` + `adapters/omarchy`；Core 只依赖接口，macOS 为开发验证台、Omarchy 为首个系统宿主 | 2026-11-15 |
 | 11 | **语音能力服务化（ADR-009，用户裁决 2026-11-15）**：TTS/ASR 以独立 HTTP 服务架设在 Omarchy 上（契约 v1：/health /contract /asr /tts）；Core 经 `JARVIS_VOICE_URL` 调用 | 2026-11-15 |
-| 12 | **语音服务零 macOS 依赖红线（用户裁决 2026-11-15）**：`apps/voice-service` 未来是独立拆分项目，不得依赖任何 macOS 内容——MacBackend 已删除（createBackend 拒绝 macos、auto 恒为 omarchy）；测试音频用仓库 fixtures；守卫测试固化该红线 | 2026-11-15 |
+| 12 | **语音服务零 macOS 依赖红线（用户裁决 2026-11-15）**：语音服务是架设在 Omarchy 系统里面的组成部分，不是独立项目，不得依赖任何 macOS 内容——MacBackend 已删除（createBackend 拒绝 macos、auto 恒为 omarchy）；测试音频用仓库 fixtures；守卫测试固化该红线 | 2026-11-15 |
 
 ## 实施进度（2026-11-15 基准）
 
@@ -80,10 +80,12 @@ JARVIS 0.1 验收三场景：①委派任务自动调度 Harness 完成并汇报
   Hyprland 0.57.2 / PipeWire / grim——此前 WEBKIT=none / PORTAL=none 是探针假阴性
 - ADR-009 语音服务化 + 零 macOS 依赖红线落盘（见决策表 #11 #12）
 
-## 语音服务独立化红线（用户裁决 2026-11-15 午后）
+## 语音服务基准（用户裁决 2026-11-15 午后，同日更正）
 
-- **`apps/voice-service` 不得依赖任何 macOS 内容**：该服务未来独立拆分项目
-- MacBackend 已删除；`createBackend("macos")` 抛错；auto 恒为 omarchy
+- **语音服务是架设在 Omarchy 系统里面的组成部分**，从属于 JARVIS-on-Omarchy
+  整体，**不是独立拆分项目**（「独立项目化」表述是记录错误，已全仓更正）
+- **零 macOS 依赖红线**：该服务只活在 Omarchy 系统内，macOS 上不存在其运行
+  形态——MacBackend 已删除；`createBackend("macos")` 抛错；auto 恒为 omarchy
 - 守卫测试（backends.test.ts）固化：源码无 macOS 专有引用 + 拒绝 macos 后端
 - 测试音频 = 仓库 fixtures（apps/voice-service/fixtures/zh-*.wav，真实人声 16k WAV）
 - 打断语义断言已移植进 verify-omarchy-voice.mjs 5c 节（guest 实测通过）

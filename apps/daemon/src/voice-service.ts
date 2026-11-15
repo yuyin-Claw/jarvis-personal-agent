@@ -4,7 +4,7 @@
  * Core 侧只认 @jarvis/platform 的 speechOutput / speechInput 契约；
  * 设置 JARVIS_VOICE_URL 后，composition root 用这里的实现覆盖原生端点，
  * 于是「语音」从 macOS say/SFSpeechRecognizer 或 Linux espeak/PipeWire 绑定，
- * 变成对独立语音服务进程的 HTTP 调用——服务可部署在 Omarchy guest 内。
+ * 变成对语音服务进程的 HTTP 调用——该服务架设在 Omarchy 系统内。
  */
 import { spawn, type ChildProcess } from "node:child_process";
 import fs from "node:fs";

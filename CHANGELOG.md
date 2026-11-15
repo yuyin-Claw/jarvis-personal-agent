@@ -3,10 +3,11 @@
 本项目的显著变更记录在此。格式参照 [Keep a Changelog](https://keepachangelog.com/zh-CN/1.1.0/)，
 版本号遵循 [SemVer](https://semver.org/lang/zh-CN/)。
 
-## [未发布] 语音服务独立化（ADR-009 基准变更）
+## [未发布] 语音服务基准更正（ADR-009）
 
-用户裁决（2026-11-15）：`apps/voice-service` 未来是独立拆分项目，
-**不得依赖任何 macOS 内容**。据此完成以下变更并全量回归：
+用户裁决（2026-11-15）：语音服务是**架设在 Omarchy 系统里面的组成部分**，
+不得依赖任何 macOS 内容（「未来拆分为独立项目」是记录错误，已全仓更正）。
+据此完成以下变更并全量回归：
 
 ### 变更
 - 删除 `MacBackend`（whisper-host + say）：`createBackend("macos")` 直接抛错，

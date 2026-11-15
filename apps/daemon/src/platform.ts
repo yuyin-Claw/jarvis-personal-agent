@@ -18,7 +18,7 @@ export async function initPlatform(id: AdapterId = detectPlatformId()): Promise<
   }
   const platform = await resolvePlatform(id);
   // ADR-009：语音能力服务化。设置 JARVIS_VOICE_URL 即把两个语音端点切到
-  // 独立语音服务进程（可运行在 Omarchy guest 内），其余平台端点不变。
+  // 语音服务进程（架设在 Omarchy 系统内），其余平台端点不变。
   const voiceUrl = process.env.JARVIS_VOICE_URL;
   return voiceUrl ? withVoiceService(platform, { url: voiceUrl }) : platform;
 }

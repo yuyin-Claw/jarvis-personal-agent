@@ -11,7 +11,7 @@
  *          JARVIS_VOICE_UPSTREAM / JARVIS_ASR_MODEL / JARVIS_TTS_VOICE
  *
  * 零外部依赖：整个 apps/voice-service 目录可直接复制到 Omarchy guest 运行。
- * ADR-009 红线：本服务是未来独立拆分的项目，零 macOS 依赖。
+ * ADR-009 红线：本服务架设在 Omarchy 系统内，零 macOS 依赖。
  */
 import http from "node:http";
 import { CONTRACT_VERSION, ENDPOINTS, MAX_AUDIO_BYTES, MAX_TEXT_CHARS, envelope, sanitizeText } from "./contract.mjs";

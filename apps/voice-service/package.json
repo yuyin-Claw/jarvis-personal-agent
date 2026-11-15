@@ -4,7 +4,7 @@
   "private": true,
   "license": "MIT",
   "type": "module",
-  "description": "JARVIS 语音服务：平台无关的 TTS/ASR HTTP 契约（零 macOS 依赖，面向 Linux/Omarchy，未来独立拆分）",
+  "description": "JARVIS 语音服务：架设在 Omarchy 系统内的 TTS/ASR HTTP 语音子系统（零 macOS 依赖）",
   "main": "./src/server.mjs",
   "scripts": {
     "start": "node src/server.mjs"
