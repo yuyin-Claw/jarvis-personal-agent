@@ -117,9 +117,13 @@ function comboEvents(...keys) {
 function bootstrapScript(base) {
   return [
     "#!/bin/sh",
+    // 空闲自愈：bridge 停止后 /cmd、/req 都返回空 → 20 分钟无工作自动退出，
+    // 避免历次注入在 guest 桌面遗留常驻终端窗口（曾堆到 110 个）
+    "IDLE=0",
     "while :; do",
     `  c=$(curl -s --max-time 8 ${base}/cmd)`,
     '  if [ -n "$c" ]; then',
+    "    IDLE=0",
     '    cmd=$(printf %s "$c" | base64 -d 2>/dev/null)',
     '    [ -n "$cmd" ] || { sleep 1; continue; }',
     '    out=$(sh -c "$cmd" 2>&1; printf "\\n__JARVIS_RC__%s" "$?")',
@@ -128,7 +132,12 @@ function bootstrapScript(base) {
     // hostfwd 在部分 QEMU 构建上不生效时，用反向 HTTP 代理把请求送进 guest
     `  p=$(curl -s --max-time 8 ${base}/req)`,
     '  if [ -n "$p" ]; then',
+    "    IDLE=0",
     '    sh -c "$p" >/dev/null 2>&1',
+    "  fi",
+    '  if [ -z "$c" ] && [ -z "$p" ]; then',
+    "    IDLE=$((IDLE+1))",
+    '    [ "$IDLE" -ge 1200 ] && { echo "[bridge] idle timeout, exit"; exit 0; }',
     "  fi",
     "  sleep 1",
     "done",
@@ -140,7 +149,9 @@ export async function createGuestBridge(opts = {}) {
   const qmpPath = findQmp();
   const queue = [];
   const hits = [];
-  let waiter = null;
+  let seq = 0;
+  /** 命令 id → 回调；结果按 id 精确匹配，杜绝轮询双通道的响应错配 */
+  const waiters = new Map();
   const log = opts.quiet ? () => {} : (...a) => console.log(...a);
   // 反向 HTTP 代理：host → (轮询命令) → guest → guest 内服务 → 结果回传
   const proxyJobs = new Map();
@@ -159,7 +170,9 @@ export async function createGuestBridge(opts = {}) {
     if (req.url === "/cmd") {
       const next = queue.shift();
       res.writeHead(200, { "content-type": "text/plain" });
-      res.end(next ? Buffer.from(next.cmd).toString("base64") : "");
+      res.end(next
+        ? Buffer.from(`${Buffer.from(next.id).toString("base64")}\n${Buffer.from(next.cmd).toString("base64")}`).toString("base64")
+        : "");
       return;
     }
     if (req.url === "/req") {
@@ -196,13 +209,18 @@ export async function createGuestBridge(opts = {}) {
       req.on("data", (c) => { body += c; });
       req.on("end", () => {
         res.writeHead(200); res.end("ok");
-        if (waiter) {
-          const m = body.match(/\n__JARVIS_RC__(-?\d+)\s*$/);
-          const out = m ? body.slice(0, m.index) : body;
-          const rc = m ? Number(m[1]) : -1;
-          waiter({ out, rc });
-          waiter = null;
-        }
+        if (process.env.JARVIS_BRIDGE_DEBUG) console.log("[bridge][out-body]", JSON.stringify(body.slice(0, 200)));
+        // 协议：首行 = base64(id)，其后为命令输出（末尾 __JARVIS_RC__<rc>）
+        const nl = body.indexOf("\n");
+        if (nl < 0) return;
+        let id = "";
+        try { id = Buffer.from(body.slice(0, nl), "base64").toString("utf8"); } catch { return; }
+        const rest = body.slice(nl + 1);
+        const m = rest.match(/\n__JARVIS_RC__(-?\d+)\s*$/);
+        const out = m ? rest.slice(0, m.index) : rest;
+        const rc = m ? Number(m[1]) : -1;
+        const w = waiters.get(id);
+        if (w) { waiters.delete(id); w({ out, rc }); }
       });
       return;
     }
@@ -247,6 +265,10 @@ export async function createGuestBridge(opts = {}) {
 
   const bootCmd = `curl -s ${GATEWAY_IP}:${port}/b|sh`;
   async function launch() {
+    // 先把活动工作区切到 1（avatar 是 pinned 窗口，在哪个工作区都可见；
+    // 但注入新开的 foot 终端只会落在活动工作区 1，不再盖住 9 上的画面）
+    // hyprctl dispatch 被 Lua 劫持：workspace 1 无参数无逗号，是合法 Lua 调用
+    await exec?.("hyprctl dispatch workspace 1 >/dev/null 2>&1", 10_000).catch?.(() => {});
     await qmp.call("input-send-event", { events: comboEvents("meta_l", "ret") });
     await new Promise((r) => setTimeout(r, 1800));
     await inject(bootCmd);
@@ -254,14 +276,15 @@ export async function createGuestBridge(opts = {}) {
   }
 
   // 等待 guest 首次取到 /b 并完成一次探测命令，证明整条链路通
-  queue.push({ cmd: "printf bridge-ready" });
+  const readyId = `ready-${++seq}`;
+  queue.push({ id: readyId, cmd: "printf bridge-ready" });
   let ready = false;
   for (let attempt = 1; attempt <= 3 && !ready; attempt++) {
     if (attempt > 1) log(`[bridge] 第 ${attempt} 次重试注入`);
     await launch();
     ready = await new Promise((resolve) => {
-      const timer = setTimeout(() => { waiter = null; resolve(false); }, 14_000);
-      waiter = (r) => { clearTimeout(timer); resolve(r.out.includes("bridge-ready")); };
+      const timer = setTimeout(() => { waiters.delete(readyId); resolve(false); }, 14_000);
+      waiters.set(readyId, (r) => { clearTimeout(timer); resolve(r.out.includes("bridge-ready")); });
     });
     if (!ready) log(`[bridge] 诊断 hits=${JSON.stringify(hits.slice(-12))}`);
   }
@@ -273,14 +296,47 @@ export async function createGuestBridge(opts = {}) {
   log("[bridge] guest 代理已就绪");
 
   async function exec(cmd, timeoutMs = 30_000) {
+    const id = `cmd-${++seq}`;
     return new Promise((resolve, reject) => {
       const timer = setTimeout(() => {
-        waiter = null;
+        waiters.delete(id);
         reject(new Error(`guest 命令超时（${timeoutMs}ms）：${cmd.slice(0, 80)}`));
       }, timeoutMs);
-      queue.push({ cmd });
-      waiter = (r) => { clearTimeout(timer); resolve(r); };
+      queue.push({ id, cmd });
+      waiters.set(id, (r) => { clearTimeout(timer); resolve(r); });
     });
+  }
+
+  // 注意：不要在就绪后清理"轮询代理进程"——pgrep -f 会匹配到轮询 sh 自己
+  // 的命令行（curl -s 10.0.2.2:port/b），把代理自杀掉，之后的命令全部超时。
+  // 桌面残留终端由空闲自愈（20 分钟）与验收前显式 pkill foot 处理。
+
+  /**
+   * 桌面净化：把注入通道遗留的终端全部移到 workspace 9，只留 JARVIS Avatar
+   * 在当前工作区。验收截图/像素断言前必须调用（每次注入 bridge 都会新开
+   * 一个 foot 终端，直接盖住数字人窗口）。
+   */
+  async function clearDesktop() {
+    const sh = [
+      "hyprctl clients -j | python3 -c '",
+      "import sys, json, subprocess",
+      "for c in json.load(sys.stdin):",
+      "  t = str(c.get(\"title\",\"\"))",
+      "  if \"JARVIS\" in t: continue",
+      "  addr = c.get(\"address\",\"\")",
+      "  subprocess.run([\"hyprctl\",\"dispatch\",\"movetoworkspacesilent\",",
+      "    \"1,address:\" + addr], capture_output=True)",
+      "' >/dev/null 2>&1",
+      // 活动工作区切到 2：avatar 是 pinned（跟随所有工作区），foot 已全部
+      // 移到 2 之外的工作区集合外——注意 pinned 窗口在哪个工作区都可见，
+      // 所以把终端集中到 2、活动区定 2，画面里只剩 avatar
+      // （终端移进的是 1；活动区 2 与它们隔离）
+      "hyprctl dispatch workspace 2 >/dev/null 2>&1",
+      // avatar 提到最前（focus 即 raise）
+      "hyprctl dispatch focuswindow 'title:JARVIS Avatar' >/dev/null 2>&1",
+      "echo DESKTOP_CLEARED",
+    ].join("\n");
+    return exec(sh, 30_000);
   }
 
   /** 运行时给 SLIRP 加一条 host→guest 端口转发（无需重启 VM） */
@@ -295,7 +351,7 @@ export async function createGuestBridge(opts = {}) {
     await new Promise((resolve) => server.close(resolve));
   }
 
-  return { exec, stop, forward, port, qmpPath, proxyUrl: `http://127.0.0.1:${port}` };
+  return { exec, stop, forward, clearDesktop, port, qmpPath, proxyUrl: `http://127.0.0.1:${port}` };
 }
 
 /** CLI */

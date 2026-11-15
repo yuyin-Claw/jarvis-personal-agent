@@ -7,6 +7,8 @@
 
 [Unit]
 Description=JARVIS 数字人窗口（开机自启，ADR-010）
+# 验收会周期性 kill -9 触发自愈，避免默认 5 次/10s 的 StartLimit 拦住恢复
+StartLimitBurst=0
 PartOf=graphical-session.target
 After=graphical-session.target
 # 语音服务先行（窗口 HUD 不依赖它，但同栈整体有序拉起）

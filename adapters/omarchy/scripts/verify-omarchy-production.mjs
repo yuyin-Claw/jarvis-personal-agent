@@ -104,8 +104,9 @@ try {
     `生产服务 TTS（${fs.statSync(outFile).size} 字节）`);
   report.core = { heard, ttsBytes: fs.statSync(outFile).size };
 
-  console.log("\n--- 5. 数字人浮动窗口六状态（生产形态，systemd 拉起） ---");
-  // 窗口已由 jarvis-avatar.service 常驻；清掉旧 socket 遗留状态即可
+  console.log("\n--- 5. 数字人窗口形态（生产形态，systemd 拉起） ---");
+  const cleared = await bridge.clearDesktop();
+  console.log(`  桌面净化：${cleared.out.includes("DESKTOP_CLEARED") ? "OK" : cleared.out.slice(-60)}`);
 
   const { x, y, w, h } = await avatarGeometry();
   check(w === 420 && h === 480, `窗口生产尺寸 420x480（实际 ${w}x${h}）`);
@@ -136,7 +137,7 @@ s.close()'`, 30_000);
     await sleep(1_400);
     const png = `${shotsDir}/${state}.png`;
     fs.rmSync(png, { force: true });
-    await bridge.exec(`grim -g '${x},${y} ${w}x${h}' /home/yuyin/Omarchy/jarvis-prod-shots/${state}.png`, 30_000);
+    await bridge.exec(`grim /home/yuyin/Omarchy/jarvis-prod-shots/${state}.png`, 30_000);
     if (!fs.existsSync(png)) { rows.push({ state, ok: false, why: "无截图" }); continue; }
     // 宿主侧像素断言（发光像素 + 状态主色）
     const { execFileSync } = await import("node:child_process");
@@ -157,7 +158,16 @@ print(json.dumps({"lit": len(lit), "avg": avg}))`], { encoding: "utf8" }));
   check(rows.every((r) => r.ok), "六状态浮动窗口全部上屏且主色正确");
   fs.writeFileSync(join(shotsDir, "report.json"), JSON.stringify(report, null, 2));
 
-  await bridge.exec("pgrep -f 'jarvis-avatar-host.py' | xargs -r kill 2>/dev/null; echo ok", 30_000);
+  // 杀掉 fullscreen 渲染实例（脚本私有，非 systemd 组件）
+  await bridge.exec("pkill -f 'jarvis-render.sock' 2>/dev/null; echo ok", 30_000);
+
+  // 验收结束：窗口驱动回 idle（systemd 管理的组件禁止脚本杀进程）
+  await bridge.exec(
+    `python3 -c '
+import socket, json
+s = socket.socket(socket.AF_UNIX); s.connect("/run/user/1000/jarvis-avatar.sock")
+s.sendall((json.dumps({"type":"frame","state":"idle","intensity":0.25})+"\n").encode())
+s.close()' >/dev/null 2>&1; echo ok`, 30_000);
 } catch (e) {
   console.error(`ERROR: ${e.stack ?? e}`);
   failures += 1;
