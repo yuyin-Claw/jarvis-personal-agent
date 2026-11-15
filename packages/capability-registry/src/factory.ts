@@ -13,7 +13,7 @@
 import fs from "node:fs";
 import path from "node:path";
 import os from "node:os";
-import { CapabilityRegistry } from "@jarvis/capability-registry";
+import type { CapabilityRegistry } from "./registry.js";
 
 export interface GapReport {
   need: string;
