@@ -26,6 +26,7 @@
 | 11 | **语音能力服务化（ADR-009，用户裁决 2026-11-15）**：TTS/ASR 以独立 HTTP 服务架设在 Omarchy 上（契约 v1：/health /contract /asr /tts）；Core 经 `JARVIS_VOICE_URL` 调用 | 2026-11-15 |
 | 12 | **语音服务零 macOS 依赖红线（用户裁决 2026-11-15）**：语音服务是架设在 Omarchy 系统里面的组成部分，不是独立项目，不得依赖任何 macOS 内容——MacBackend 已删除（createBackend 拒绝 macos、auto 恒为 omarchy）；测试音频用仓库 fixtures；守卫测试固化该红线 | 2026-11-15 |
 | 13 | **JARVIS 系统栈开机自启动（ADR-010，用户裁决 2026-11-15）**：用户所说「唯一操作入口」含义即开机自启——系统启动数字人就在；JARVIS 栈（jarvis-voice + jarvis-avatar）在 Omarchy 上 systemd --user 开机自启为一个整体（「仅经数字人交互、不设 GUI」的引申表述已更正） | 2026-11-15 |
+| 14 | **0.4 Harness Factory = 能力闭环 MVP（ADR-011，用户裁决 2026-11-15）**：Registry/缺口探测/Factory 流水线（复用 CodingHarness）/沙箱契约测试/安全审查/注册回滚；权限绝不自动授予（申请单唯一路径）；MCP 生成等留 0.5+ | 2026-11-15 |
 
 ## 实施进度（2026-11-15 基准）
 

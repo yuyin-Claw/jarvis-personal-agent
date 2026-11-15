@@ -128,3 +128,36 @@
 - 代价：数字人窗口进程成为常驻组件，其崩溃必须自愈（restart=on-failure 已覆盖）；
   Core daemon 的 Linux 常驻单元尚待部署（下一步）。
 - 状态：已接受（2026-11-15 用户裁决；同日按用户澄清更正表述）
+
+**ADR-011: 0.4 Harness Factory——能力闭环而非工具闭环**
+- 场景：v0.2.1 后 JARVIS 已在 Omarchy 内自治运行，但能力固定（对话/记忆/任务/
+  一个 Coding Harness）。备忘录答案 C 与 PRD FR-11 要求自我扩展：发现能力缺口 →
+  设计 → 开发 → 沙箱测试 → 安全审查 → 注册 → 可回滚。
+- 决策：
+  - **0.4 范围 = 能力闭环 MVP**，不是通用插件系统。交付六件：
+    1. `CapabilityRegistry`（能力目录：声明、版本、状态、健康检查）——单一事实源
+    2. `CapabilityGap` 探测：Orchestrator 判定「无可用能力」时产出结构化缺口
+       （而非泛泛回答），并给出缺口描述与验收标准
+    3. `HarnessFactory`：调度现有 CodingHarness 开发新 Skill（Skill = 自包含
+       TypeScript/Shell 工具包，接口契约先行：输入输出 schema + 测试样例）
+    4. 沙箱测试：新 Skill 只能在隔离 workDir 内跑契约测试（复用 PermissionBroker
+       沙箱），测试不过不注册
+    5. 安全审查 + 权限红线：新能力默认零权限；**Factory 永不自行授予任何权限**
+       （需要新权限 → 生成申请单 → 用户对话内批准，复用 0.1 的审批门）
+    6. 注册与回滚：注册即写入 Registry（SQLite 迁移）；禁用/回滚 = 状态位切换，
+       不删文件
+  - **不做**（留给 0.5+）：MCP Server 生成、多语言 Skill、自动版本升级、
+    Capability 市场、非 Coding Harness 类型生成。
+  - Skill 形态：目录约定（skill.json 清单 + src/ + tests/ + README），
+    执行走子进程（与 Harness 同沙箱模型），首个手写 Skill 作为参照实现。
+  - 验收标准（真实闭环，非冒烟）：
+    1. 用户对话提出一个 Registry 里没有的能力 → JARVIS 输出缺口分析
+    2. Factory 生成 Skill 代码 + 测试 → 沙箱跑测试全绿
+    3. 安全审查通过 + 零权限注册 → Orchestrator 下一次可直接调度该能力
+    4. 对该 Skill 下禁用指令 → 后续调度立即回落（不重启）
+    5. 全程审计落库（每次 Factory 运行都是一条 audit 记录）
+- 理由：自我扩展是备忘录三答案中 C 的落地，但真正的价值在「缺口→能力→可用」
+  闭环跑通；权限绝不自动授予是不可逾越的红线（备忘录 §428）。
+- 代价：Factory 复用 CodingHarness（不自建代码生成栈）；Skill MVP 限
+  TypeScript/Shell；能力质量依赖测试契约的严格程度。
+- 状态：已接受（2026-11-15 用户裁决方向：发版后启动 0.4）
