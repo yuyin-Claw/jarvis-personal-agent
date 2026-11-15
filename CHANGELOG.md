@@ -3,11 +3,19 @@
 本项目的显著变更记录在此。格式参照 [Keep a Changelog](https://keepachangelog.com/zh-CN/1.1.0/)，
 版本号遵循 [SemVer](https://semver.org/lang/zh-CN/)。
 
-## [未发布] 语音服务基准更正（ADR-009）
+## [0.2.1] - 2026-11-15 — 语音服务化 · 生产化部署 · 全栈进驻 Omarchy
 
-用户裁决（2026-11-15）：语音服务是**架设在 Omarchy 系统里面的组成部分**，
-不得依赖任何 macOS 内容（「未来拆分为独立项目」是记录错误，已全仓更正）。
-据此完成以下变更并全量回归：
+本版把 JARVIS 从「macOS 上开发的跨系统验证」推进为「Omarchy 内完整自治运行」：
+
+- **ADR-009** 语音能力服务化：架设在 Omarchy 系统内的语音子系统，零 macOS 依赖
+- **ADR-010** JARVIS 系统栈开机自启动（语音服务 + 数字人窗口 + Core daemon）
+- **Core 进驻 Omarchy**：三 unit systemd 常驻，guest 内真实 GLM 对话闭环
+- **语音引擎完全本地化**：whisper.cpp ASR + piper 神经音色 TTS
+
+（用户裁决 2026-11-15：语音服务是 Omarchy 系统的组成部分、零 macOS 依赖；
+「唯一操作入口」含义即开机自启动。）
+
+### 变更
 
 ### 变更
 - 删除 `MacBackend`（whisper-host + say）：`createBackend("macos")` 直接抛错，
