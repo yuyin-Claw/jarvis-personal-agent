@@ -20,6 +20,8 @@ export interface VoiceServiceOptions {
   url: string;
   /** 覆盖播放命令；默认按平台选择 afplay / pw-play */
   player?: string;
+  /** 播放期振幅回调（口型同步驱动）：每 ~40ms 推一次 0-1 包络值，结束推 0 */
+  onAmplitude?: (a: number) => void;
   platform?: NodeJS.Platform;
   /** 注入 fetch（测试用） */
   fetchImpl?: typeof fetch;
@@ -144,7 +146,7 @@ export class VoiceServiceSpeechOutput implements SpeechOutputAdapter {
       return reason;
     };
 
-    let result: { audio: Buffer; format: string };
+    let result: { audio: Buffer; format: string; sampleRate: number };
     try {
       result = await this.client.synthesize(clean, { voice: speakOpts.voice, rate: speakOpts.rate }, ac.signal);
     } catch {
@@ -169,11 +171,32 @@ export class VoiceServiceSpeechOutput implements SpeechOutputAdapter {
     }
     this.current = proc;
 
+    // 口型同步：真实振幅包络按播放进度推送（wav 分帧 RMS）。
+    // 采样率用合成结果（piper 22050；macOS 原生 say 16000 兼容）
+    const env = this.opts.onAmplitude && result.format === "wav"
+      ? analyzeAmplitude(result.audio, result.sampleRate)
+      : [];
+    let envIdx = 0;
+    let ampTimer: NodeJS.Timeout | undefined;
+    if (env.length > 0 && this.opts.onAmplitude) {
+      const push = this.opts.onAmplitude;
+      push(0.05); // 起播微张（避免首帧闭合突变）
+      ampTimer = setInterval(() => {
+        if (envIdx >= env.length) {
+          if (ampTimer) clearInterval(ampTimer);
+          return;
+        }
+        push(env[envIdx++] ?? 0);
+      }, 40);
+    }
+
     return new Promise<SpeakEndReason>((resolve) => {
       let settled = false;
       const finish = (reason: SpeakEndReason) => {
         if (settled) return;
         settled = true;
+        if (ampTimer) clearInterval(ampTimer);
+        this.opts.onAmplitude?.(0); // 口型闭合（结束/打断都归零）
         resolve(settle(reason, dir));
       };
       proc?.on("error", () => finish("error"));
@@ -346,7 +369,14 @@ export class VoiceServiceSpeechInput implements SpeechInputAdapter {
 
 /** 用语音服务端点覆盖平台适配器的两个语音端点，其余保持不变 */
 export function withVoiceService(platform: PlatformAdapter, opts: VoiceServiceOptions): PlatformAdapter {
-  const out = new VoiceServiceSpeechOutput(platform.id, opts);
+  // 口型同步接线：播放期真实振幅 → avatarHost.setState(amplitude)。
+  // 若用户已提供 onAmplitude 则优先（测试/定制），否则自动接到 avatar。
+  const amplitudeSink = opts.onAmplitude ?? ((a: number) => {
+    void platform.avatarHost?.setState({
+      state: "speaking", intensity: 0.8, amplitude: a,
+    }).catch(() => undefined);
+  });
+  const out = new VoiceServiceSpeechOutput(platform.id, { ...opts, onAmplitude: amplitudeSink });
   const input = new VoiceServiceSpeechInput(platform.id, opts);
   return {
     ...platform,
@@ -359,4 +389,26 @@ export function withVoiceService(platform: PlatformAdapter, opts: VoiceServiceOp
       return [...rest, await out.probe(), await input.probe()];
     },
   };
+}
+
+/**
+ * wav（PCM s16le）分帧 RMS 振幅包络。
+ * 20ms 一帧；归一化到 0-1（32768 满幅；用 sqrt(RMS) 提升中低音量区分度）
+ */
+export function analyzeAmplitude(wav: Buffer, sampleRate: number): number[] {
+  const data = wav.subarray(44); // 标准 44 字节头（piper/macOS say 均为此格式）
+  const frameSamples = Math.max(1, Math.round(sampleRate * 0.02));
+  const frames = Math.floor(data.length / 2 / frameSamples);
+  const out: number[] = [];
+  for (let f = 0; f < frames; f++) {
+    let sum = 0;
+    const base = f * frameSamples * 2;
+    for (let i = 0; i < frameSamples; i++) {
+      const v = data.readInt16LE(base + i * 2) / 32768;
+      sum += v * v;
+    }
+    const rms = Math.sqrt(sum / frameSamples);
+    out.push(Math.min(1, Math.sqrt(rms) * 1.6)); // sqrt 提升中低音量；1.6 增益
+  }
+  return out;
 }

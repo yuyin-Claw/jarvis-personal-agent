@@ -34,7 +34,17 @@ import { ContextEngine } from "@jarvis/context-engine";
 import type { AwarenessSource } from "@jarvis/context-engine";
 import { ConversationGateway } from "./gateway.js";
 import { JARVIS_SYSTEM_PROMPT } from "./persona.js";
-import { loadConfig } from "./config.js";
+import { loadConfig, loadDotEnv } from "./config.js";
+
+// env 文件合成（systemd 部署场景）：JARVIS_ENV_FILE 指定的 env 文件键
+// 合入 process.env（仅补缺，不覆盖已有环境变量）。否则 initPlatform 读
+// process.env.JARVIS_VOICE_URL 时 env 文件里的值不可见 → 语音服务化
+// 失效（振幅口型/实时监听全链路依赖该端点）。
+if (process.env.JARVIS_ENV_FILE) {
+  for (const [k, v] of Object.entries(loadDotEnv(process.env.JARVIS_ENV_FILE))) {
+    if (process.env[k] === undefined) process.env[k] = v;
+  }
+}
 import { initPlatform } from "./platform.js";
 
 async function main(): Promise<void> {

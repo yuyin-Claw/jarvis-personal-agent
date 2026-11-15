@@ -19,7 +19,7 @@ export interface JarvisConfig {
 }
 
 /** 极简 .env 加载（不引依赖；只支持 KEY=VALUE，# 注释） */
-function loadDotEnv(file: string): Record<string, string> {
+export function loadDotEnv(file: string): Record<string, string> {
   const out: Record<string, string> = {};
   try {
     const text = fs.readFileSync(file, "utf8");

@@ -102,6 +102,8 @@ const st = (endpoint: AdapterStatus["endpoint"], state: AdapterStatus["state"], 
 class OmarchyAvatarHost implements AvatarHostAdapter {
   readonly id = "omarchy" as const;
   private proc: OmarchyProc | undefined;
+  /** 复用 unit 已有 socket（未 spawn 自有进程） */
+  private attachedToUnit = false;
   private geometry = { x: 80, y: 80, width: 420, height: 480 };
 
   constructor(private readonly o: OmarchyPlatformOptions) {}
@@ -149,6 +151,14 @@ class OmarchyAvatarHost implements AvatarHostAdapter {
       x: opts.x ?? 80, y: opts.y ?? 80,
       width: opts.width ?? 420, height: opts.height ?? 480,
     };
+    // 单一渲染者原则（ADR-010）：jarvis-avatar unit 已渲染（socket 在监听）
+    // 时直接复用，不再 spawn 第二实例——否则两个进程抢同一 socket，
+    // 帧被随机消费、窗口竞争。spawnImpl 注入的测试场景除外。
+    if (!this.o.spawnImpl && (this.o.exists ?? defaultExists)(this.socket)) {
+      this.attachedToUnit = true;
+      await this.syncGeometry();
+      return;
+    }
     const script = this.o.hostScript ?? DEFAULT_HOST_SCRIPT;
     const html = this.o.htmlPath ?? DEFAULT_HTML;
     this.proc = (this.o.spawnImpl ?? defaultSpawn)("python3", [
@@ -167,7 +177,8 @@ class OmarchyAvatarHost implements AvatarHostAdapter {
   }
 
   async setState(frame: AvatarFrame): Promise<void> {
-    if (!this.proc) return; // 宿主未启动时明确不上屏，不假装成功
+    // 可写条件：自有进程在跑，或已附着 unit 的 socket（unit 独占渲染场景）
+    if (!this.proc && !this.attachedToUnit) return; // 宿主未启动时明确不上屏
     const write = this.o.socketWrite ?? defaultSocketWrite;
     await write(this.socket, JSON.stringify({ type: "frame", ...frame }) + "\n");
   }
@@ -185,6 +196,8 @@ class OmarchyAvatarHost implements AvatarHostAdapter {
   }
 
   async stop(): Promise<void> {
+    // 附着 unit 的只断开附着（unit 窗口归 systemd 管，不杀）
+    if (this.attachedToUnit) { this.attachedToUnit = false; return; }
     this.proc?.kill("SIGTERM");
     this.proc = undefined;
   }
