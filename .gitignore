@@ -32,3 +32,8 @@ packages/voice/native/jarvis-speech
 dist/
 node_modules/
 *.tsbuildinfo
+# 防止编译产物误入 src（tsc 偶发把 dist 写进源目录）
+packages/*/src/**/*.js
+packages/*/src/**/*.d.ts
+packages/*/src/**/*.js.map
+packages/*/src/**/*.d.ts.map
