@@ -102,6 +102,26 @@ packages/voice/scripts/verify-tts.sh   # say 只写 AIFF 文件，不发声
 `SpeechInput` 消费 macOS 语音识别的 JSONL；用户开口的首段识别结果会立即
 打断 TTS。语音识别授权未就绪时自动降级到文本输入，不弹系统窗、不阻塞主流程。
 
+### 平台适配层（ADR-007）
+
+Core 只依赖 `@jarvis/platform` 的五个端点接口（窗口宿主 / 语音输出 / 语音输入 /
+前台感知 / 通知），具体实现由 composition root 按环境注入：
+
+```sh
+jarvis platform        # 查看当前平台五端点状态
+JARVIS_PLATFORM=omarchy jarvis platform   # 在 macOS 上探测 Omarchy 适配器
+```
+
+| 实现 | 端点技术 |
+|---|---|
+| `adapters/macos` | WKWebView 宿主 / `say` / SFSpeechRecognizer / NSWorkspace / osascript |
+| `adapters/omarchy` | GTK4+WebKitGTK 透明窗口（共用同一份 `avatar.html`） / espeak-ng / XDG Portal + PipeWire / Hyprland IPC / notify-send |
+
+macOS 是开发验证台，Omarchy 是首个系统宿主（ADR-001/005）。Omarchy 侧
+Hyprland/Portal/PipeWire 与 Wayland 窗口渲染需在 Try Omarchy 虚拟机实测；
+自包含验证包位于 `~/Omarchy/jarvis-omarchy-probe/`，guest 内执行 `sh verify.sh`
+即可输出五端点真实依赖状态。
+
 ## 核心设计原则
 
 1. **人格统一**——Harness 永远是执行环境，不成为用户的交互入口

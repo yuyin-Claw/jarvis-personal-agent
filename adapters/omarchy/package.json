@@ -1,0 +1,25 @@
+{
+  "name": "@jarvis/adapter-omarchy",
+  "version": "0.0.1",
+  "private": true,
+  "license": "MIT",
+  "type": "module",
+  "main": "./dist/index.js",
+  "types": "./dist/index.d.ts",
+  "exports": {
+    ".": {
+      "types": "./dist/index.d.ts",
+      "default": "./dist/index.js"
+    }
+  },
+  "scripts": {
+    "build": "tsc -b",
+    "test": "vitest run"
+  },
+  "dependencies": {
+    "@jarvis/platform": "workspace:*"
+  },
+  "devDependencies": {
+    "@jarvis/tsconfig": "workspace:*"
+  }
+}

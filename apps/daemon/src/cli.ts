@@ -7,6 +7,7 @@
  *   jarvis --continue       # 继续最近会话
  *   jarvis ask "问题"        # 单次问答
  *   jarvis tasks            # 任务列表
+ *   jarvis platform         # 平台适配器五端点状态（macOS / Omarchy）
  *
  * 环境变量见 config.ts。Ctrl+C 退出（状态已持久化，重进 --continue 恢复）。
  */
@@ -21,13 +22,27 @@ import { SqliteMemoryEngine } from "@jarvis/memory";
 import { SqliteTaskManager } from "@jarvis/task-manager";
 import { Orchestrator } from "@jarvis/orchestrator";
 import { CodingHarness, PermissionBroker, type AuditEntry } from "@jarvis/harness-runtime";
-import { ContextEngine, MacForegroundSource } from "@jarvis/context-engine";
+import { ContextEngine } from "@jarvis/context-engine";
+import type { AwarenessSource } from "@jarvis/context-engine";
 import { ConversationGateway } from "./gateway.js";
 import { JARVIS_SYSTEM_PROMPT } from "./persona.js";
 import { loadConfig } from "./config.js";
+import { initPlatform } from "./platform.js";
 
 async function main(): Promise<void> {
   const args = process.argv.slice(2);
+
+  // ---- 平台探测（不加载 DB / 不需要 .env，便于在任意宿主上排查适配层） ----
+  if (args[0] === "platform") {
+    const platform = await initPlatform();
+    const statuses = await platform.probe();
+    console.log(`JARVIS 平台适配器：${platform.id}`);
+    for (const s of statuses) {
+      console.log(`  ${s.endpoint.padEnd(14)} ${s.state.padEnd(12)} ${s.detail ?? ""}`);
+    }
+    return;
+  }
+
   const config = loadConfig();
 
   // ---- 存储（memory 与 task 共用一个库文件） ----
@@ -38,10 +53,24 @@ async function main(): Promise<void> {
   const tasks = new SqliteTaskManager({ db: taskDb });
   tasks.migrate();
 
-  // ---- Ambient 感知（感知→决策接线） ----
+  // ---- Ambient 感知（经 Platform Adapter 注入，Core 不依赖具体桌面） ----
+  const platform = await initPlatform();
   const context = new ContextEngine({ db: taskDb });
   context.migrate();
-  const foreground = new MacForegroundSource();
+  const foreground: AwarenessSource = {
+    id: `platform-${platform.id}-foreground`,
+    async sample() {
+      const c = await platform.foreground.current();
+      if (!c) return null;
+      return {
+        source: `platform-${platform.id}-foreground`,
+        kind: "app_focus",
+        app: c.app ?? "unknown",
+        detail: c.title,
+        at: new Date(c.at).toISOString(),
+      };
+    },
+  };
   // 启动预采一次（决策时读已入库数据；provider 里的异步补采供下一轮）
   await context.sampleFrom(foreground).catch(() => undefined);
 

@@ -7,6 +7,9 @@
   "include": ["src"],
   "exclude": ["src/**/*.test.ts"],
   "references": [
+    { "path": "../../adapters/macos" },
+    { "path": "../../adapters/omarchy" },
+    { "path": "../../adapters/platform" },
     { "path": "../../packages/context-engine" },
     { "path": "../../packages/harness-runtime" },
     { "path": "../../packages/llm-gateway" },

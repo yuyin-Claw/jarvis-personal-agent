@@ -36,3 +36,25 @@
 - 决策：JARVIS Core 平台无关部分（对话/记忆/任务/调度）在 macOS 直接开发；Omarchy 特有部分（Hyprland IPC/XDG Portal/PipeWire）在 Try Omarchy VM 验证
 - 理由：核心循环不被 VM 依赖阻塞，加快 Phase 1-3 迭代
 - 状态：已接受（2026-11-14）
+
+**ADR-007: 0.2 平台端点统一收归 Platform Adapter（恢复架构 §7.1）**
+- 场景：0.2-②③ 为快速完成自动截图/语音验收，数字人窗口直接用了 macOS NSWindow/WKWebView，
+  语音直接用了 `say` / SFSpeechRecognizer / AVFoundation；`adapters/` 目录（pnpm-workspace、
+  vitest、架构目录树均已预留）实际为空，且未立 ADR。用户 2026-11-15 指出偏离"融入 Omarchy"基准。
+- 决策：
+  - 恢复三层：**Core → Platform Adapter（`adapters/platform` 纯接口）→ 平台实现
+    （`adapters/macos` / `adapters/omarchy`）**；`packages/*` 只依赖接口，不得 import 平台实现。
+  - 五个平台端点：`AvatarHost` / `SpeechOutput` / `SpeechInput` / `ForegroundSource` / `Notification`。
+    能力缺失时返回 `unsupported` / `unavailable` 并降级，**不静默假装成功**。
+  - 维持 ADR-001（独立仓库 + 适配器对接）与 ADR-005（macOS 为开发验证台、Omarchy 为首个系统宿主）；
+    不 fork Omarchy、不把代码并入汉化 fork（ADR-003）。
+  - 架构 §16 待确认项「数字人采用 Tauri 原生窗口还是独立桌面进程」收敛为**可替换宿主**：
+    接口固定，macOS 用 WKWebView 宿主，Omarchy 用 Wayland 层壳/WebKitGTK 宿主共用同一
+    `avatar.html` 渲染层；未来切 VRM 3D 只换渲染层，Core 零改动。
+  - 麦克风/屏幕采集必须经 XDG Portal / PipeWire 授权会话（AGENTS.md 架构红线），
+    Omarchy 适配器不得绕过授权直接抓音频设备。
+- 理由：0.2 的逻辑层（状态引擎、事件桥、RenderTransport、VoiceIO）本就平台无关，
+  真正绑定的只有 5 个端点；抽接口成本低，可让 0.2-②③ 成果在 Omarchy 上复用而非重写。
+- 代价：需维护两套平台实现；Omarchy 侧 Hyprland/Portal/PipeWire 需在 VM 实测
+  （当前 Try Omarchy VM 无 guest-exec、sshd 未随运行时 hostfwd 启动，实测通道待打通）。
+- 状态：已接受（2026-11-15 用户裁决：补适配层 + Omarchy 实现）

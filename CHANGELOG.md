@@ -31,14 +31,30 @@
 - `packages/voice/native/speech-input.swift`：中文实时识别助手（zh-CN），
   `--status-only` 可在零权限下探测授权状态
 
+### 新增（平台适配层，ADR-007）
+- `adapters/platform`：五个平台端点契约（AvatarHost / SpeechOutput / SpeechInput /
+  ForegroundSource / Notification）+ 注册表 + 能力探测 + Null 降级基线，零平台依赖
+- `adapters/macos`：收编原有 WKWebView 宿主 / `say` / SFSpeechRecognizer /
+  NSWorkspace / osascript 五端点
+- `adapters/omarchy`：GTK4+WebKitGTK 透明窗口（复用同一份 `avatar.html`）、
+  Hyprland IPC 前台感知、XDG Portal 授权 + PipeWire 采集、espeak-ng、notify-send；
+  麦克风采集必须先取得授权会话，失败即拒绝启动（架构红线）
+- `apps/daemon` composition root：按环境动态注入实现，CLI 新增 `jarvis platform`
+  探测命令；Core 不再直接 import 平台实现
+- 自包含 guest 验证包 `~/Omarchy/jarvis-omarchy-probe/`（9p 共享目录）
+
 ### 修复
 - 首版宿主把 JSON 文本直接插入 `JSON.parse()` 且 FIFO 读端一次性关闭，
   导致状态指令全部被吞；改为 base64 注入 + 状态文件轮询
 
 ### 验收
-- 160/160 测试通过；六状态端到端渲染验收通过（帧 106→394，橙/绿/紫主色实测上屏）
+- 186/186 测试通过；六状态端到端渲染验收通过（帧 106→394，橙/绿/紫主色实测上屏）
 - `packages/voice/scripts/verify-tts.sh`：`say` 真实合成 AIFF（39KB，不发声）、
   状态轨迹 listening>thinking>speaking>idle、tts 事件齐备、识别权限探测通过
+- `node apps/daemon/dist/cli.js platform` 实测：macOS 四端点 ready、
+  语音识别 unavailable（notDetermined → 自动降级文本输入）
+- Try Omarchy VM 通道现状：QMP 无 guest-exec / 无 qemu-ga，`hostfwd_add` 后
+  guest sshd 未响应，9p 共享目录无执行通道 → guest 内实测待打通，未假装通过
 
 ## [0.1.0] - 2026-11-15
 

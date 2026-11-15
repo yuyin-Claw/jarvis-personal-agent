@@ -15,11 +15,14 @@
     "test": "vitest run"
   },
   "dependencies": {
+    "@jarvis/adapter-macos": "workspace:*",
+    "@jarvis/adapter-omarchy": "workspace:*",
     "@jarvis/context-engine": "workspace:*",
     "@jarvis/harness-runtime": "workspace:*",
     "@jarvis/llm-gateway": "workspace:*",
     "@jarvis/memory": "workspace:*",
     "@jarvis/orchestrator": "workspace:*",
+    "@jarvis/platform": "workspace:*",
     "@jarvis/runtime": "workspace:*",
     "@jarvis/task-manager": "workspace:*"
   },

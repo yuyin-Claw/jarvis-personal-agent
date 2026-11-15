@@ -34,8 +34,52 @@ importers:
         specifier: ^2.1.8
         version: 2.1.9(@types/node@22.20.5)
 
+  adapters/macos:
+    dependencies:
+      '@jarvis/avatar':
+        specifier: workspace:*
+        version: link:../../packages/avatar
+      '@jarvis/context-engine':
+        specifier: workspace:*
+        version: link:../../packages/context-engine
+      '@jarvis/platform':
+        specifier: workspace:*
+        version: link:../platform
+      '@jarvis/runtime':
+        specifier: workspace:*
+        version: link:../../packages/runtime
+      '@jarvis/voice':
+        specifier: workspace:*
+        version: link:../../packages/voice
+    devDependencies:
+      '@jarvis/tsconfig':
+        specifier: workspace:*
+        version: link:../../packages/tsconfig
+
+  adapters/omarchy:
+    dependencies:
+      '@jarvis/platform':
+        specifier: workspace:*
+        version: link:../platform
+    devDependencies:
+      '@jarvis/tsconfig':
+        specifier: workspace:*
+        version: link:../../packages/tsconfig
+
+  adapters/platform:
+    devDependencies:
+      '@jarvis/tsconfig':
+        specifier: workspace:*
+        version: link:../../packages/tsconfig
+
   apps/daemon:
     dependencies:
+      '@jarvis/adapter-macos':
+        specifier: workspace:*
+        version: link:../../adapters/macos
+      '@jarvis/adapter-omarchy':
+        specifier: workspace:*
+        version: link:../../adapters/omarchy
       '@jarvis/context-engine':
         specifier: workspace:*
         version: link:../../packages/context-engine
@@ -51,6 +95,9 @@ importers:
       '@jarvis/orchestrator':
         specifier: workspace:*
         version: link:../../packages/orchestrator
+      '@jarvis/platform':
+        specifier: workspace:*
+        version: link:../../adapters/platform
       '@jarvis/runtime':
         specifier: workspace:*
         version: link:../../packages/runtime

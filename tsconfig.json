@@ -7,6 +7,9 @@
   },
   "files": [],
   "references": [
+    { "path": "adapters/platform" },
+    { "path": "adapters/macos" },
+    { "path": "adapters/omarchy" },
     { "path": "apps/daemon" },
     { "path": "packages/avatar" },
     { "path": "packages/context-engine" },

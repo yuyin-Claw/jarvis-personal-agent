@@ -1,0 +1,16 @@
+{
+  "extends": "@jarvis/tsconfig/node.json",
+  "compilerOptions": {
+    "rootDir": "src",
+    "outDir": "dist"
+  },
+  "include": ["src"],
+  "exclude": ["src/**/*.test.ts"],
+  "references": [
+    { "path": "../platform" },
+    { "path": "../../packages/avatar" },
+    { "path": "../../packages/context-engine" },
+    { "path": "../../packages/runtime" },
+    { "path": "../../packages/voice" }
+  ]
+}

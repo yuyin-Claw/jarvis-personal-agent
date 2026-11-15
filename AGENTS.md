@@ -34,6 +34,9 @@
 - 屏幕/麦克风采集必须走 XDG Portal/PipeWire 授权会话，禁止隐蔽采集
 - 事件驱动，禁止无休止模型轮询
 - JARVIS Core 不得依赖 Omarchy 私有脚本（Platform Adapter 隔离）
+- 平台端点（窗口宿主/语音输出/语音输入/前台感知/通知）必须经 `@jarvis/platform`
+  接口由 composition root 注入；Core 不得直接 import `adapters/macos` 或
+  `adapters/omarchy`（ADR-007）
 - 私密区域（密码管理器/银行/锁屏）默认禁止感知，不确定时停止采集
 
 ## 工程规范
