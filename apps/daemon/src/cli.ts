@@ -205,7 +205,16 @@ async function main(): Promise<void> {
     }),
   );
 
-  // ---- Harness（工作目录：~/jarvis-workspace） ----
+  // ---- Harness（工作目录：~/jarvis-workspace，启动时确保存在） ----
+  mkdirSync(envWorkDir(), { recursive: true });
+  // 孤儿任务恢复：上次进程被杀死时 RUNNING 的任务无人收尾 → 转 BLOCKED
+  // （用户可 jarvis run <id> 续跑；状态机不悬空）
+  for (const t of tasks.list()) {
+    if (t.status === "RUNNING") {
+      tasks.transition(t.id, "BLOCKED");
+      console.log(`〔恢复〕孤儿任务 ${t.id}（${t.title}）由 RUNNING 转 BLOCKED，可 jarvis run 续跑`);
+    }
+  }
   const workDir = envWorkDir();
   const harness = new CodingHarness({ gateway, model: config.model });
 
@@ -347,7 +356,14 @@ async function main(): Promise<void> {
     console.log(`〔用户确认执行：${t.title}〕目标：${t.goal}`);
     if (t.status === "CREATED") tasks.transition(t.id, "PLANNED");
     tasks.transition(t.id, "RUNNING");
-    const job = await harness.execute({ workDir, goal: t.goal });
+    let job;
+    try {
+      job = await harness.execute({ workDir, goal: t.goal });
+    } catch (e) {
+      tasks.transition(t.id, "FAILED");
+      console.log(`〔任务失败〕${(e as Error).message}`);
+      return;
+    }
     tasks.assign(t.id, harness.id, job.jobId);
     for await (const ev of harness.streamEvents(job.jobId)) {
       if (ev.type === "progress") {
@@ -500,7 +516,16 @@ async function main(): Promise<void> {
       console.log(`〔委派 ${harness.id} 执行：${t.title}…〕`);
       tasks.transition(t.id, "PLANNED");
       tasks.transition(t.id, "RUNNING");
-      const job = await harness.execute({ workDir, goal: t.goal });
+      let job;
+      try {
+        job = await harness.execute({ workDir, goal: t.goal });
+      } catch (e) {
+        // 执行失败必须落到终态，否则状态机悬空（RUNNING 无人收尾）
+        tasks.transition(t.id, "FAILED");
+        console.log(`〔任务失败〕${(e as Error).message}`);
+        memory.appendMessage(conversationId, "assistant", `任务失败：${(e as Error).message}`);
+        return;
+      }
       tasks.assign(t.id, harness.id, job.jobId);
       // 等待作业完成
       for await (const ev of harness.streamEvents(job.jobId)) {
