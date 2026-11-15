@@ -25,7 +25,9 @@
 <div id="caption"></div>
 <script>
 "use strict";
-// JARVIS 全息形象渲染器：消费 AestheticState（状态+强度），粒子系统表现六状态
+// JARVIS 全息形象 v2：粒子人脸（光球云 → 由光点组成的脸）
+// 拓扑：轮廓椭圆 + 眉弧×2 + 眼环×2(+瞳) + 鼻梁 + 唇环×2（口型） + 氛围云
+// 状态接口与 v1 完全兼容（window.jarvis.setState/setAmplitude/getState/frame）
 const canvas = document.getElementById("stage");
 const ctx = canvas.getContext("2d");
 const captionEl = document.getElementById("caption");
@@ -39,7 +41,7 @@ function resize() {
 window.addEventListener("resize", resize);
 resize();
 
-// ---- 状态（由宿主 postMessage 或 IPC 驱动） ----
+// ---- 状态（宿主驱动，与 v1 同协议） ----
 let state = "idle";
 let intensity = 0.15;
 let caption = "";
@@ -58,35 +60,87 @@ function color(alpha) {
   return `rgba(${p.r},${p.g},${p.b},${alpha})`;
 }
 
-// ---- 粒子系统 ----
-const N = 160;
-const particles = [];
-for (let i = 0; i < N; i++) {
-  particles.push({
-    a: Math.random() * Math.PI * 2,        // 角度
-    r0: 0.55 + Math.random() * 0.45,       // 轨道半径系数
-    speed: 0.2 + Math.random() * 0.8,      // 角速度
-    size: 0.8 + Math.random() * 1.8,
-    phase: Math.random() * Math.PI * 2,    // 呼吸相位
-    wander: Math.random() * Math.PI * 2,
-  });
+// ---- 人脸拓扑点集（归一化坐标：x∈[-1,1], y∈[-1,1]，渲染时乘 R） ----
+// 组：outline 轮廓 / brow 眉 / eye 眼 / pupil 瞳 / nose 鼻 / lip 唇 / aura 氛围云
+const facePoints = [];
+function addPoints(group, pts, opts = {}) {
+  for (const [x, y] of pts) {
+    facePoints.push({ group, tx: x, ty: y, size: opts.size ?? (0.8 + Math.random() * 1.6),
+      phase: Math.random() * Math.PI * 2, wander: Math.random() * Math.PI * 2,
+      // 粒子在脸上的初始位置 = 目标点附近随机散布（出生即聚合成脸）
+      x: x + (Math.random() - 0.5) * 0.3, y: y + (Math.random() - 0.5) * 0.3 });
+  }
 }
+// 轮廓：竖椭圆 52 点（脸宽 0.78，高 1.0）
+{
+  const pts = [];
+  for (let i = 0; i < 52; i++) {
+    const a = (i / 52) * Math.PI * 2;
+    pts.push([Math.cos(a) * 0.78, Math.sin(a) * 1.0]);
+  }
+  addPoints("outline", pts, { size: 1.4 });
+}
+// 眉：左右各 9 点弧（眉心低、眉梢高；thinking 时内端下压）
+for (const side of [-1, 1]) {
+  const pts = [];
+  for (let i = 0; i < 9; i++) {
+    const t = i / 8;                    // 0=眉心 1=眉梢
+    const x = side * (0.12 + t * 0.30); // x 从 ±0.12 到 ±0.42
+    const y = -0.42 - Math.sin(t * Math.PI * 0.9) * 0.06;
+    pts.push([x, y]);
+  }
+  addPoints(side < 0 ? "browL" : "browR", pts, { size: 1.2 });
+}
+// 眼：左右各环 10 点 + 瞳 1
+for (const side of [-1, 1]) {
+  const ex = side * 0.28, ey = -0.22;
+  const pts = [];
+  for (let i = 0; i < 10; i++) {
+    const a = (i / 10) * Math.PI * 2;
+    pts.push([ex + Math.cos(a) * 0.13, ey + Math.sin(a) * 0.085]);
+  }
+  addPoints(side < 0 ? "eyeL" : "eyeR", pts, { size: 1.1 });
+  addPoints(side < 0 ? "pupilL" : "pupilR", [[ex, ey]], { size: 2.4 });
+}
+// 鼻：鼻梁 4 点 + 鼻尖 3
+addPoints("nose", [[0, -0.1], [0, 0.02], [0, 0.12], [0.015, 0.2], [-0.015, 0.2], [0, 0.22], [0, 0.05]], { size: 0.9 });
+// 唇：外环 14 + 内环（口型）14，中心 y=0.52
+{
+  const outer = [], inner = [];
+  for (let i = 0; i < 14; i++) {
+    const a = (i / 14) * Math.PI * 2;
+    outer.push([Math.cos(a) * 0.24, 0.52 + Math.sin(a) * 0.06]);  // 外唇静态
+    inner.push([Math.cos(a) * 0.17, 0.52 + Math.sin(a) * 0.05]);  // 内唇（口型开合）
+  }
+  addPoints("lipOuter", outer, { size: 1.3 });
+  addPoints("lipInner", inner, { size: 1.1 });
+}
+// 氛围云：30 点散布在脸外圈（保留光球气质）
+{
+  const pts = [];
+  for (let i = 0; i < 30; i++) {
+    const a = Math.random() * Math.PI * 2;
+    const rr = 1.15 + Math.random() * 0.35;
+    pts.push([Math.cos(a) * rr * 0.9, Math.sin(a) * rr]);
+  }
+  addPoints("aura", pts, { size: 0.9 });
+}
+const N = facePoints.length;
 
-// 音频幅度（speaking/listening 时由宿主推送 0-1）
+// ---- 音频幅度（speaking 时由宿主推送 0-1；talk 链路的口型驱动） ----
 let amplitude = 0;
 
-function waveRadius(t, i) {
-  // 各状态的核心轮廓
-  const p = particles[i];
-  switch (state) {
-    case "idle": return R * (0.85 + 0.05 * Math.sin(t * 0.0012 + p.phase)); // 呼吸球
-    case "listening": return R * (0.8 - 0.25 * intensity * (0.5 + 0.5 * Math.sin(p.a * 3 + t * 0.004))); // 收束
-    case "thinking": return R * (0.7 + 0.18 * Math.sin(p.a * 2 - t * 0.005)); // 旋涡
-    case "speaking": return R * (0.8 + 0.35 * amplitude * Math.sin(p.a * 5 + t * 0.012) + 0.1 * Math.sin(p.a + t * 0.003)); // 波动扩散
-    case "working": return R * (0.75 + 0.15 * Math.sin(t * 0.006 + p.phase)); // 脉冲
-    case "responding": return R * (0.9 + 0.12 * Math.sin(t * 0.008 + p.a)); // 高亮绽放
-    default: return R * 0.85;
-  }
+/** 口型：唇内圈开合系数（0=闭合，1=大开）。真实幅度优先，无则程序振荡 */
+function mouthOpenness(t) {
+  if (state !== "speaking") return 0.06; // 其他态唇微启（自然）
+  const driven = amplitude > 0.02 ? amplitude : (0.35 + 0.3 * Math.sin(t * 0.014) * Math.sin(t * 0.0031));
+  return Math.max(0.04, Math.min(1, driven));
+}
+
+/** 眨眼：每 3-5s 闭合 140ms（1=全开 0=闭合） */
+function blinkFactor(t) {
+  const cycle = (t / 1000) % 4.2;
+  return cycle < 0.14 ? Math.max(0.08, cycle / 0.14) : 1;
 }
 
 let frame = 0;
@@ -94,73 +148,107 @@ function draw(t) {
   frame++;
   ctx.clearRect(0, 0, W, H);
   const since = t - stateAt;
-  const settle = Math.min(1, since / 600); // 状态切换过渡
+  const settle = Math.min(1, since / 600);
+  const blink = blinkFactor(t);
+  const mouth = mouthOpenness(t);
 
-  // 光晕（核心 glow）
+  // 光晕（面部中心，状态色）
   const p = PALETTE[state] || PALETTE.idle;
-  const glowR = R * (1.15 + 0.1 * Math.sin(t * 0.001));
+  const glowR = R * (1.35 + 0.1 * Math.sin(t * 0.001));
   const grad = ctx.createRadialGradient(CX, CY, 0, CX, CY, glowR);
-  grad.addColorStop(0, `rgba(${p.r},${p.g},${p.b},${0.28 * p.glow * (0.6 + 0.4 * intensity)})`);
+  grad.addColorStop(0, `rgba(${p.r},${p.g},${p.b},${0.26 * p.glow * (0.6 + 0.4 * intensity)})`);
   grad.addColorStop(1, "rgba(0,0,0,0)");
   ctx.fillStyle = grad;
   ctx.beginPath(); ctx.arc(CX, CY, glowR, 0, Math.PI * 2); ctx.fill();
 
-  // 粒子
+  // 粒子人脸
   for (let i = 0; i < N; i++) {
-    const pt = particles[i];
-    pt.a += pt.speed * 0.002 * (state === "thinking" ? 2.4 : state === "working" ? 1.4 : 1);
-    const rr = waveRadius(t, i) * pt.r0 * (0.6 + 0.4 * settle);
-    const wobble = (state === "speaking" ? 4 * amplitude : 1.5) * Math.sin(t * 0.01 + pt.wander);
-    const x = CX + Math.cos(pt.a) * (rr + wobble);
-    const y = CY + Math.sin(pt.a) * (rr + wobble) * 0.92; // 略扁=更立体
-    const alpha = (0.25 + 0.55 * pt.size / 2.6) * (0.5 + 0.5 * settle);
+    const pt = facePoints[i];
+    let tx = pt.tx, ty = pt.ty;
+
+    // ---- 状态表情参数 ----
+    // thinking：眉心下压（眉弧内端 y+0.06）+ 瞳微聚
+    if (pt.group.startsWith("brow") && state === "thinking") {
+      const inner = 1 - Math.min(1, Math.abs(pt.tx) / 0.42); // 越靠眉心越强
+      ty += 0.06 * inner * settle;
+    }
+    // listening：轮廓（尤其耳侧）呼吸增强 + 唇微张期待
+    if (pt.group === "outline" && state === "listening") {
+      const earBoost = Math.abs(pt.tx) > 0.6 ? 1.0 : 0.4;
+      tx *= 1 + 0.03 * Math.sin(t * 0.004) * earBoost * intensity;
+    }
+    // 眨眼：眼环 y 压缩（瞳不变，保持眼神）
+    if (pt.group.startsWith("eye")) {
+      ty = -0.22 + (ty + 0.22) * blink;
+    }
+    // 口型：内唇按 mouth 开合（外唇不动 = 轮廓稳定）
+    if (pt.group === "lipInner") {
+      ty = 0.52 + (ty - 0.52) * (0.35 + mouth * 2.4);
+      tx *= 1 + mouth * 0.15; // 开口时略宽
+    }
+    // speaking 时外唇微动（轮廓跟随）
+    if (pt.group === "lipOuter" && state === "speaking") {
+      ty += mouth * 0.02 * Math.sin(pt.phase + t * 0.01);
+    }
+
+    // 平滑追踪目标（spring 近似：每帧向目标 18% 靠拢）
+    pt.x += (tx - pt.x) * 0.18;
+    pt.y += (ty - pt.y) * 0.18;
+
+    // 微浮动（脸的呼吸感；唇区幅度小、轮廓与氛围云大）
+    const wob = (pt.group === "aura" ? 0.035 : pt.group === "outline" ? 0.015 : 0.004)
+      * (state === "thinking" ? 1.6 : 1);
+    const x = CX + (pt.x + Math.sin(t * 0.0012 + pt.wander) * wob) * R;
+    const y = CY + (pt.y + Math.cos(t * 0.001 + pt.phase) * wob) * R * 1.08;
+
+    // 亮度：listening 耳区/轮廓亮、thinking 额眉亮、speaking 唇亮
+    let boost = 0;
+    if (state === "listening" && (pt.group === "outline" || pt.group === "aura")) boost = 0.25;
+    if (state === "thinking" && (pt.group.startsWith("brow") || pt.group === "aura")) boost = 0.2;
+    if (state === "speaking" && pt.group.startsWith("lip")) boost = 0.3;
+    if (pt.group.startsWith("pupil")) boost += 0.25;
+    const alpha = Math.min(1, (0.3 + 0.5 * pt.size / 2.4 + boost) * (0.55 + 0.45 * settle));
     ctx.fillStyle = color(alpha);
     ctx.beginPath();
-    ctx.arc(x, y, pt.size * (0.8 + 0.4 * intensity), 0, Math.PI * 2);
+    ctx.arc(x, y, pt.size * (0.8 + 0.4 * intensity) * (pt.group.startsWith("pupil") ? 1 : 1), 0, Math.PI * 2);
     ctx.fill();
   }
 
-  // thinking：旋转轨道环
+  // thinking：眉间微蹙的辅助弧线（额区）
   if (state === "thinking") {
-    ctx.strokeStyle = color(0.3);
+    ctx.strokeStyle = color(0.25);
     ctx.lineWidth = 1;
-    for (let k = 0; k < 3; k++) {
-      const tilt = t * 0.001 * (k % 2 ? 1 : -1) + k * 2;
-      ctx.beginPath();
-      ctx.ellipse(CX, CY, R * (1.05 + k * 0.12), R * (0.3 + k * 0.08), tilt, 0, Math.PI * 2);
-      ctx.stroke();
-    }
+    ctx.beginPath();
+    ctx.ellipse(CX, CY - R * 0.62, R * 0.3, R * 0.1, Math.sin(t * 0.001) * 0.2, 0, Math.PI * 2);
+    ctx.stroke();
   }
-
-  // working：进度弧
+  // working：进度弧（绕脸外圈）
   if (state === "working") {
     ctx.strokeStyle = color(0.85);
     ctx.lineWidth = 2.5;
     ctx.beginPath();
-    ctx.arc(CX, CY, R * 1.18, -Math.PI / 2, -Math.PI / 2 + Math.PI * 2 * Math.max(0.08, intensity));
+    ctx.arc(CX, CY, R * 1.25, -Math.PI / 2, -Math.PI / 2 + Math.PI * 2 * Math.max(0.08, intensity));
     ctx.stroke();
   }
-
   // responding：一次性扩散冲击波
   if (state === "responding" && since < 1200) {
     const pr = since / 1200;
     ctx.strokeStyle = color(0.6 * (1 - pr));
     ctx.lineWidth = 2;
-    ctx.beginPath(); ctx.arc(CX, CY, R * (0.8 + pr * 1.6), 0, Math.PI * 2); ctx.stroke();
+    ctx.beginPath(); ctx.arc(CX, CY, R * (0.9 + pr * 1.6), 0, Math.PI * 2); ctx.stroke();
   }
-
-  // idle 呼吸内芯
+  // idle：面部呼吸光（鼻梁区微光，比 v1 的实心球内敛）
   if (state === "idle") {
     const b = 0.5 + 0.5 * Math.sin(t * 0.0012);
-    ctx.fillStyle = color(0.25 + 0.2 * b);
-    ctx.beginPath(); ctx.arc(CX, CY, R * 0.28 * (0.9 + 0.1 * b), 0, Math.PI * 2); ctx.fill();
+    ctx.fillStyle = color(0.10 + 0.08 * b);
+    ctx.beginPath(); ctx.ellipse(CX, CY - R * 0.1, R * 0.5, R * 0.62, 0, 0, Math.PI * 2); ctx.fill();
   }
 
   requestAnimationFrame(draw);
 }
 requestAnimationFrame(draw);
 
-// ---- 宿主接口：window.jarvis 更新状态 ----
+// ---- 宿主接口（与 v1 完全一致，socket/协议零改动） ----
 window.jarvis = {
   setState(s, i, cap) {
     if (PALETTE[s]) { state = s; stateAt = performance.now(); }
@@ -173,17 +261,16 @@ window.jarvis = {
   },
   setAmplitude(a) { amplitude = Math.max(0, Math.min(1, a)); },
   getState() { return { state, intensity, amplitude, caption }; },
-  /** 渲染帧计数：宿主/验收脚本据此确认画面确实推进 */
   frame() { return frame; },
+  /** 验收探针：当前口型开合与眨眼系数（grim 差分验证用） */
+  faceProbe() { return { mouth: mouthOpenness(performance.now()), blink: blinkFactor(performance.now()) }; },
 };
-// 兼容别名：window.setAvatarState({state, intensity, amplitude, caption})
 window.setAvatarState = (d) => {
   if (!d || typeof d !== "object") return;
   window.jarvis.setState(d.state, d.intensity, d.caption);
   if (typeof d.amplitude === "number") window.jarvis.setAmplitude(d.amplitude);
 };
 
-// 拖动窗口（宿主注入 webkit messageHandlers 或全屏拖区由 CSS -webkit-app-region 处理）
 document.body.style.webkitAppRegion = "drag";
 </script>
 </body>
