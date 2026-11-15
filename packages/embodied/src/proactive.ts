@@ -139,7 +139,8 @@ export class ProactiveVoiceChannel {
     this.announcing = true;
     try {
       while (this.queue.length > 0 && this.engine.aesthetic.state === "idle") {
-        const item = this.queue.shift()!;
+        const item = this.queue.shift();
+        if (!item) break;
         if (this.now() - item.at > this.ttlMs) {
           this.emit("expired", item.notice.dedupeKey);
           continue;

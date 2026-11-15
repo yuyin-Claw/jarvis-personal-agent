@@ -219,14 +219,17 @@ async function main(): Promise<void> {
       memory.close();
       return;
     }
-    if (t.status !== "CREATED" && t.status !== "BLOCKED") {
-      console.error(`任务状态 ${t.status} 不可执行（需 CREATED/BLOCKED）`);
+    // 与 TaskManager 状态机对齐：
+    //   CREATED → PLANNED → RUNNING；BLOCKED / WAITING_APPROVAL → RUNNING（不可先转 PLANNED）
+    const runnable = new Set(["CREATED", "BLOCKED", "WAITING_APPROVAL"]);
+    if (!runnable.has(t.status)) {
+      console.error(`任务状态 ${t.status} 不可执行（需 CREATED/BLOCKED/WAITING_APPROVAL）`);
       process.exitCode = 1;
       memory.close();
       return;
     }
     console.log(`〔用户确认执行：${t.title}〕目标：${t.goal}`);
-    tasks.transition(t.id, "PLANNED");
+    if (t.status === "CREATED") tasks.transition(t.id, "PLANNED");
     tasks.transition(t.id, "RUNNING");
     const job = await harness.execute({ workDir, goal: t.goal });
     tasks.assign(t.id, harness.id, job.jobId);
@@ -345,6 +348,12 @@ async function main(): Promise<void> {
         actor: "agent",
       });
       if (t.requiresApproval || !verdict.allow) {
+        // 审批门要落到状态机上（CREATED → PLANNED → WAITING_APPROVAL），
+        // 否则 WAITING_APPROVAL 永远无生产者，门禁形同虚设。
+        if (t.requiresApproval) {
+          tasks.transition(t.id, "PLANNED");
+          tasks.transition(t.id, "WAITING_APPROVAL");
+        }
         console.log(`〔任务已创建，等待你确认后执行〕`);
         console.log(`  任务 ${t.id}：${t.title}`);
         console.log(`  目标：${t.goal}`);

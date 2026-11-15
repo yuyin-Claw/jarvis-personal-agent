@@ -93,15 +93,23 @@ apps/avatar/scripts/verify-render.sh
 Node 侧推荐用 `AvatarRenderTransport`（`packages/avatar`）发布状态或直接
 `bind(engine)` 订阅状态引擎，无需手写 seq。
 
-语音链路（0.2-③）：
+语音链路（0.2-③ / ADR-009）：语音能力已服务化——`apps/voice-service` 是零依赖、
+零 macOS 依赖的独立 HTTP 服务（未来拆分为独立项目），部署在 Omarchy 上：
 
 ```sh
-packages/voice/scripts/verify-tts.sh   # say 只写 AIFF 文件，不发声
+# guest 内启动（ASR: superwhisper/whisper.cpp/vosk，TTS: espeak-ng/piper）
+node src/server.mjs --backend omarchy --port 8787
+
+# Core 侧：设 JARVIS_VOICE_URL 即把语音两端点切到该服务
+JARVIS_VOICE_URL=http://<omarchy>:8787 jarvis talk "在吗"
+
+# 跨系统真实语音对话验收（fixture 音频 → guest ASR → GLM → guest TTS → 打断语义）
+node adapters/omarchy/scripts/verify-omarchy-voice.mjs
 ```
 
-`MacSayTTS` 负责输出，`VoiceIO` 把 TTS 生命周期接到状态引擎，
-`SpeechInput` 消费 macOS 语音识别的 JSONL；用户开口的首段识别结果会立即
-打断 TTS。语音识别授权未就绪时自动降级到文本输入，不弹系统窗、不阻塞主流程。
+Core 内 `MacSayTTS` / `SpeechInput` 仅作为 macOS 适配器（`adapters/macos`）的
+开发验证台实现；服务化路径下 Core 不绑定任何语音引擎。语音识别授权未就绪时
+自动降级到文本输入，不弹系统窗、不阻塞主流程。
 
 ### 平台适配层（ADR-007）
 
@@ -119,9 +127,10 @@ JARVIS_PLATFORM=omarchy jarvis platform   # 在 macOS 上探测 Omarchy 适配�
 | `adapters/omarchy` | GTK4+WebKitGTK 透明窗口（共用同一份 `avatar.html`） / espeak-ng / XDG Portal + PipeWire / Hyprland IPC / notify-send |
 
 macOS 是开发验证台，Omarchy 是首个系统宿主（ADR-001/005）。Omarchy 侧
-Hyprland/Portal/PipeWire 与 Wayland 窗口渲染需在 Try Omarchy 虚拟机实测；
-自包含验证包位于 `~/Omarchy/jarvis-omarchy-probe/`，guest 内执行 `sh verify.sh`
-即可输出五端点真实依赖状态。
+Hyprland/Portal/PipeWire 与 Wayland 窗口渲染已在 Try Omarchy VM 实测通过
+（`adapters/omarchy/scripts/verify-omarchy-avatar-host.mjs`：生产适配器驱动
+六状态真实上屏 + 像素断言）；语音服务部署与跨系统契约验收见
+`verify-omarchy-voice.mjs`。
 
 ### 具身对话与主动交流（0.2-④⑤）
 

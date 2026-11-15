@@ -52,7 +52,8 @@ export class HyprlandIpc {
         if (done) return;
         done = true;
         sock.end();
-        err ? reject(err) : resolve(buf);
+        if (err) reject(err);
+        else resolve(buf);
       };
       // IpcSocket 回调签名在实现上由 net.Socket 提供，这里用宽松类型承接
       (sock.on as (e: string, cb: (...a: unknown[]) => void) => unknown)("data", (c: unknown) => {
@@ -110,7 +111,9 @@ export class GdbusCaptureAuthorization implements CaptureAuthorization {
         const { stdout } = await this.exec("gdbus", [
           "call", "--session", "--dest", "org.freedesktop.portal.Desktop",
           "--object-path", "/org/freedesktop/portal/desktop",
-          "--method", "org.freedesktop.portal.Settings.ReadAll", "''",
+          // ReadAll 的参数类型是 as（字符串数组），gdbus 必须传 GVariant 字面量 []；
+          // 旧值 "''" 会被当成字符串而解析失败，导致 Portal 明明存活却报不可用。
+          "--method", "org.freedesktop.portal.Settings.ReadAll", "[]",
         ]);
         if (!stdout) return { ok: false, detail: "XDG Portal 无响应" };
         return { ok: true, detail: "XDG Portal 存活；PipeWire 音频会话由 pw-record 建立（VM 实测待补）" };

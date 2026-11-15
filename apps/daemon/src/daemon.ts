@@ -205,11 +205,15 @@ async function main(): Promise<void> {
   process.on("SIGINT", shutdown);
   process.on("SIGTERM", shutdown);
 
-  // 启动即跑一次：活动首采 + 停滞检查
+  // 启动即跑一次：活动首采 + 停滞检查 + 空闲问候判定
+  // 空闲问候原本只由 600s 定时器驱动，宿主刚启动且已空闲 30 分钟以上时要等下一拍；
+  // 与其余 job 一致，启动时先判定一次（未达阈值则立即返回，不产生额外打扰）。
   const firstSample = rt.getJob("activity-sample");
   if (firstSample) await rt.runJob(firstSample);
   const first = rt.getJob("stagnation-check");
   if (first) await rt.runJob(first);
+  const firstGreeting = rt.getJob("idle-greeting");
+  if (firstGreeting) await rt.runJob(firstGreeting);
 
   // 保持事件循环
   setInterval(() => undefined, 1 << 30);

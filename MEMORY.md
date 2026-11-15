@@ -23,6 +23,8 @@
 | 8 | Try Omarchy VM 已首次启动，实测中文汉化程度差——汉化 fork 优先级上调 | 2026-11-14 |
 | 9 | **实施基准确立（用户裁决 2026-11-15）**：0.1-0.3 已落地，保留现项目边界与技术决策不再扩大范围；可靠闭环（任务→理解→执行→验证→汇报）优先于一切扩展；Harness Factory/数字人/动态 UI 挂起不阻塞闭环 | 2026-11-15 |
 | 10 | **平台端点收归 Platform Adapter（ADR-007，用户裁决 2026-11-15）**：保留 ADR-001 独立仓库；补 `adapters/platform` 接口 + `adapters/macos` + `adapters/omarchy`；Core 只依赖接口，macOS 为开发验证台、Omarchy 为首个系统宿主 | 2026-11-15 |
+| 11 | **语音能力服务化（ADR-009，用户裁决 2026-11-15）**：TTS/ASR 以独立 HTTP 服务架设在 Omarchy 上（契约 v1：/health /contract /asr /tts）；Core 经 `JARVIS_VOICE_URL` 调用 | 2026-11-15 |
+| 12 | **语音服务零 macOS 依赖红线（用户裁决 2026-11-15）**：`apps/voice-service` 未来是独立拆分项目，不得依赖任何 macOS 内容——MacBackend 已删除（createBackend 拒绝 macos、auto 恒为 omarchy）；测试音频用仓库 fixtures；守卫测试固化该红线 | 2026-11-15 |
 
 ## 实施进度（2026-11-15 基准）
 
@@ -63,3 +65,27 @@ JARVIS 0.1 验收三场景：①委派任务自动调度 Harness 完成并汇报
 - **2026-11-15 收尾**：五步全部完成并发布 `v0.2.0`；ADR-007 补平台适配层
   （Core → Platform Adapter → macos/omarchy），ADR-008 固化具身对话与主动交流的事件归属；
   自动验收以生产 composition root 驱动真实窗口 + 像素断言为准，禁止手工 setState 冒充对话
+
+## 2026-11-15 实测回归（用户裁决：全部通过验收再继续）
+
+- 全量 build / lint / 226 测试绿；0.1/0.3/CLI 回归 21/21（真实 GLM、真实落盘、跨进程记忆、
+  权限拦截、platform 五端点、talk 闭环、WAITING_APPROVAL 门禁、BLOCKED 恢复执行）
+- 持续运行验收 11/11；macOS 六状态渲染 / TTS / 具身对话验收全过
+- 修复真实缺陷：whisper 输出文件名（converted.txt）、CLI run 状态守卫、
+  Omarchy 适配器缺默认 spawn/socketWrite、Portal gdbus 参数、宿主全屏/不透明验收模式
+- **Omarchy guest 全链路实测通过**：生产适配器六状态上屏 + 像素断言
+  （verify-omarchy-avatar-host.mjs）；语音服务 superwhisper ASR + espeak-ng TTS +
+  真实 GLM 闭环 + 打断语义（verify-omarchy-voice.mjs）
+- **guest 能力实测**：GTK 4.24.1 / webkit2gtk-4.1 2.54.2 / Portal D-Bus 存活 /
+  Hyprland 0.57.2 / PipeWire / grim——此前 WEBKIT=none / PORTAL=none 是探针假阴性
+- ADR-009 语音服务化 + 零 macOS 依赖红线落盘（见决策表 #11 #12）
+
+## 语音服务独立化红线（用户裁决 2026-11-15 午后）
+
+- **`apps/voice-service` 不得依赖任何 macOS 内容**：该服务未来独立拆分项目
+- MacBackend 已删除；`createBackend("macos")` 抛错；auto 恒为 omarchy
+- 守卫测试（backends.test.ts）固化：源码无 macOS 专有引用 + 拒绝 macos 后端
+- 测试音频 = 仓库 fixtures（apps/voice-service/fixtures/zh-*.wav，真实人声 16k WAV）
+- 打断语义断言已移植进 verify-omarchy-voice.mjs 5c 节（guest 实测通过）
+- 复验：全量 build/lint/226 测试绿；core 21/21、runtime 11/11、
+  render/embodied/tts、guest avatar、guest voice（含打断）全部 PASS

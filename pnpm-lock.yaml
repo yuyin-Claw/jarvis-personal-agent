@@ -118,6 +118,8 @@ importers:
         specifier: workspace:*
         version: link:../../packages/tsconfig
 
+  apps/voice-service: {}
+
   packages/avatar:
     dependencies:
       '@jarvis/runtime':

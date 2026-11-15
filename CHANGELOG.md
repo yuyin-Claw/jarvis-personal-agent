@@ -3,6 +3,32 @@
 本项目的显著变更记录在此。格式参照 [Keep a Changelog](https://keepachangelog.com/zh-CN/1.1.0/)，
 版本号遵循 [SemVer](https://semver.org/lang/zh-CN/)。
 
+## [未发布] 语音服务独立化（ADR-009 基准变更）
+
+用户裁决（2026-11-15）：`apps/voice-service` 未来是独立拆分项目，
+**不得依赖任何 macOS 内容**。据此完成以下变更并全量回归：
+
+### 变更
+- 删除 `MacBackend`（whisper-host + say）：`createBackend("macos")` 直接抛错，
+  `auto` 恒为 `omarchy`，不再按 `process.platform` 分支；后端只剩
+  `omarchy` / `upstream` / `fake` 三种
+- 删除 macOS 专用语音对话 E2E（`verify-voice-dialogue.sh/.mjs`）；其独有的
+  **打断语义断言**（partial→listening / TTS 中止 / user_interrupt / 不误派
+  tts_end / 说完进 thinking）移植进 `verify-omarchy-voice.mjs` 的 5c 节，
+  在 Omarchy guest 上实测通过
+- 测试音频改为仓库内置 fixtures（`apps/voice-service/fixtures/zh-*.wav`，
+  真实人声 16k WAV）：验收流程不再调用 `say` 等任何宿主专有合成工具
+- 新增零 macOS 依赖守卫测试：backends.mjs 无 macOS 专有引用、
+  createBackend 拒绝 macos、auto 恒为 omarchy、whisper.cpp 输出文件名契约
+- `verify-omarchy-voice.mjs` 去除宿主上游降级通道（随 MacBackend 一并移除），
+  guest 服务以纯本地引擎运行
+
+### 验收
+- guest 内 superwhisper ASR 真实识别 fixture「请介绍一下你自己。」与
+  「等一下，我有个问题。」；espeak-ng 真实合成 203KB WAV；
+  Core 经 `JARVIS_VOICE_URL` 跨系统调用全绿；打断语义 5 项全 PASS
+- 全仓 226/226 测试通过、lint 通过
+
 ## [0.2.0] - 2026-11-15 — Embodied Conversational Agent
 
 ### 新增（0.2-① 状态引擎）

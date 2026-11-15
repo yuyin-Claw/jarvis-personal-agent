@@ -10,7 +10,9 @@
  *
  * 全部系统交互可注入；VM 内依赖状态由 probe() 明确报告，不静默假装成功。
  */
-import { writeFileSync } from "node:fs";
+import { existsSync, writeFileSync } from "node:fs";
+import { spawn } from "node:child_process";
+import net from "node:net";
 import { fileURLToPath } from "node:url";
 import { probePlatform } from "@jarvis/platform";
 import type {
@@ -47,6 +49,28 @@ export interface OmarchyProc {
   kill(signal?: NodeJS.Signals): boolean;
 }
 
+/** 生产默认：真正拉起 python3 宿主进程（此前缺默认值，start() 必然抛错） */
+const defaultSpawn = (cmd: string, args: string[]): OmarchyProc =>
+  spawn(cmd, args, { stdio: ["ignore", "pipe", "pipe"] }) as unknown as OmarchyProc;
+
+/** 生产默认：向宿主 Unix socket 写一帧状态（此前缺默认值，setState() 静默丢弃） */
+const defaultSocketWrite = (path: string, line: string): Promise<void> =>
+  new Promise((resolve, reject) => {
+    const sock = net.createConnection(path);
+    sock.setTimeout(3_000);
+    sock.once("connect", () => {
+      sock.write(line, () => {
+        sock.end();
+        resolve();
+      });
+    });
+    sock.once("error", reject);
+    sock.once("timeout", () => {
+      sock.destroy();
+      reject(new Error(`avatar host socket 连接超时：${path}`));
+    });
+  });
+
 export interface OmarchyPlatformOptions {
   platform?: NodeJS.Platform;
   env?: NodeJS.ProcessEnv;
@@ -67,6 +91,8 @@ export interface OmarchyPlatformOptions {
 }
 
 const defaultHasCommand = async (cmd: string) => {
+  // 绝对路径（例如无 root 安装到 ~/.local/espeak 的 espeak-ng）不走 PATH
+  if (cmd.includes("/")) return existsSync(cmd);
   try { await defaultExec("which", [cmd]); return true; } catch { return false; }
 };
 
@@ -84,6 +110,39 @@ class OmarchyAvatarHost implements AvatarHostAdapter {
     return this.o.socketPath ?? `${this.o.env?.XDG_RUNTIME_DIR ?? "/run/user/1000"}/jarvis-avatar.sock`;
   }
 
+  /**
+   * Wayland 下 Gtk.Window.move() 由合成器决定，窗口未必落在 start() 传入的坐标；
+   * grim 必须按窗口真实几何截图，否则截到桌面而不是数字人。
+   * 注入 exec 的环境是单元测试/模拟，不做真实窗口查询。
+   */
+  private async syncGeometry(): Promise<void> {
+    if (this.o.exec) return;
+    for (let i = 0; i < 12; i++) {
+      try {
+        const { stdout } = await defaultExec("hyprctl", ["clients", "-j"]);
+        const clients = JSON.parse(stdout) as Array<{
+          title?: string;
+          class?: string;
+          at?: [number, number];
+          size?: [number, number];
+        }>;
+        const w = clients.find(
+          (c) => /JARVIS Avatar/i.test(c.title ?? "") || /jarvis/i.test(c.class ?? ""),
+        );
+        if (w?.at && w?.size) {
+          this.geometry = {
+            x: Math.round(w.at[0]),
+            y: Math.round(w.at[1]),
+            width: Math.round(w.size[0]),
+            height: Math.round(w.size[1]),
+          };
+          return;
+        }
+      } catch { /* 窗口尚未映射或 hyprctl 暂不可用 */ }
+      await new Promise((r) => setTimeout(r, 250));
+    }
+  }
+
   async start(opts: AvatarHostOptions = {}): Promise<void> {
     if ((this.o.platform ?? process.platform) !== "linux") throw new Error("Omarchy avatar host requires Linux/Wayland");
     this.geometry = {
@@ -92,16 +151,24 @@ class OmarchyAvatarHost implements AvatarHostAdapter {
     };
     const script = this.o.hostScript ?? DEFAULT_HOST_SCRIPT;
     const html = this.o.htmlPath ?? DEFAULT_HTML;
-    this.proc = (this.o.spawnImpl ?? (() => { throw new Error("spawnImpl 未注入"); }))("python3", [
+    this.proc = (this.o.spawnImpl ?? defaultSpawn)("python3", [
       script, "--html", html, "--socket", this.socket,
       "--x", String(this.geometry.x), "--y", String(this.geometry.y),
       "--width", String(this.geometry.width), "--height", String(this.geometry.height),
     ]);
+    // 生产路径：等宿主 socket 就绪再允许 setState，避免首帧丢失
+    if (!this.o.socketWrite) {
+      const deadline = Date.now() + 5_000;
+      while (Date.now() < deadline && !defaultExists(this.socket)) {
+        await new Promise((r) => setTimeout(r, 100));
+      }
+    }
+    await this.syncGeometry();
   }
 
   async setState(frame: AvatarFrame): Promise<void> {
-    const write = this.o.socketWrite;
-    if (!write) return; // 宿主未连接时静默丢弃（ack 由宿主侧补充）
+    if (!this.proc) return; // 宿主未启动时明确不上屏，不假装成功
+    const write = this.o.socketWrite ?? defaultSocketWrite;
     await write(this.socket, JSON.stringify({ type: "frame", ...frame }) + "\n");
   }
 
@@ -126,9 +193,27 @@ class OmarchyAvatarHost implements AvatarHostAdapter {
     if ((this.o.platform ?? process.platform) !== "linux") return st("avatarHost", "unsupported", "requires Linux/Wayland");
     const exists = this.o.exists ?? defaultExists;
     const ok = exists(this.o.hostScript ?? DEFAULT_HOST_SCRIPT) && exists(this.o.htmlPath ?? DEFAULT_HTML);
-    return ok
-      ? st("avatarHost", "degraded", "GTK4/WebKitGTK 宿主脚本就绪，渲染与截图待 Try Omarchy VM 实测")
-      : st("avatarHost", "unavailable", "缺 avatar-host.py 或 avatar.html");
+    if (!ok) return st("avatarHost", "unavailable", "缺 avatar-host.py 或 avatar.html");
+    // 真实探测 GUI 栈：Try Omarchy 4.0 只装 webkit2gtk-4.1（GTK3），宿主脚本双路径兜底
+    const detect = [
+      "import gi",
+      "try:",
+      " gi.require_version('WebKit','6.0')",
+      " from gi.repository import WebKit",
+      " print('gtk4-webkit6.0')",
+      "except Exception:",
+      " gi.require_version('Gtk','3.0')",
+      " gi.require_version('WebKit2','4.1')",
+      " from gi.repository import Gtk, WebKit2",
+      " print('gtk3-webkit2-4.1')",
+    ].join("\n");
+    try {
+      const { stdout } = await (this.o.exec ?? defaultExec)("python3", ["-c", detect]);
+      const mode = stdout.trim() || "unknown";
+      return st("avatarHost", "ready", `宿主 GUI 栈可用（${mode}）；avatar-host.py 与 avatar.html 就位`);
+    } catch (e) {
+      return st("avatarHost", "unavailable", `GTK/WebKit 不可用：${String(e).slice(0, 120)}`);
+    }
   }
 }
 
@@ -145,11 +230,11 @@ class OmarchySpeechOutput implements SpeechOutputAdapter {
     if ((this.o.platform ?? process.platform) !== "linux") return "unsupported";
     if (this.proc) this.interrupt();
     this.interrupted = false;
-    const cmd = this.o.ttsCmd ?? "espeak-ng";
+    const cmd = this.o.ttsCmd ?? process.env.JARVIS_ESPEAK_BIN ?? "espeak-ng";
     const args = opts.outputFile ? ["-w", opts.outputFile, text] : [text];
     let proc: OmarchyProc;
     try {
-      proc = (this.o.spawnImpl ?? (() => { throw new Error("spawnImpl 未注入"); }))(cmd, args);
+      proc = (this.o.spawnImpl ?? defaultSpawn)(cmd, args);
     } catch {
       return "error";
     }
@@ -176,9 +261,10 @@ class OmarchySpeechOutput implements SpeechOutputAdapter {
   async probe(): Promise<AdapterStatus> {
     if ((this.o.platform ?? process.platform) !== "linux") return st("speechOutput", "unsupported", "requires Linux");
     const has = this.o.hasCommand ?? defaultHasCommand;
-    return (await has(this.o.ttsCmd ?? "espeak-ng"))
-      ? st("speechOutput", "ready", this.o.ttsCmd ?? "espeak-ng")
-      : st("speechOutput", "unavailable", `${this.o.ttsCmd ?? "espeak-ng"} 未安装`);
+    const cmd = this.o.ttsCmd ?? process.env.JARVIS_ESPEAK_BIN ?? "espeak-ng";
+    return (await has(cmd))
+      ? st("speechOutput", "ready", cmd)
+      : st("speechOutput", "unavailable", `${cmd} 未安装`);
   }
 }
 

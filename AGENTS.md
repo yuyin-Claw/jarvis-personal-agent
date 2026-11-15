@@ -37,6 +37,9 @@
 - 平台端点（窗口宿主/语音输出/语音输入/前台感知/通知）必须经 `@jarvis/platform`
   接口由 composition root 注入；Core 不得直接 import `adapters/macos` 或
   `adapters/omarchy`（ADR-007）
+- **`apps/voice-service` 零 macOS 依赖**（ADR-009，用户裁决 2026-11-15）：
+  该服务未来独立拆分为单独项目，不得引入任何 macOS 专有工具、框架或
+  按平台的分支；测试音频一律用仓库内置 fixtures，不得调用宿主专有合成工具
 - 私密区域（密码管理器/银行/锁屏）默认禁止感知，不确定时停止采集
 
 ## 工程规范

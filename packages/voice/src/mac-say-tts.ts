@@ -49,6 +49,7 @@ const defaultSpawn: SaySpawn = (args) =>
 /** 清洗朗读文本：去控制字符、压缩空白、限长、防 say 选项注入 */
 export function sanitizeSpeechText(text: string, maxChars = 500): string {
   const clean = text
+    // eslint-disable-next-line no-control-regex -- 朗读文本必须剥离控制字符，防 say 参数注入
     .replace(/[\u0000-\u001f\u007f]/g, " ")
     .replace(/\s+/g, " ")
     .trim()
