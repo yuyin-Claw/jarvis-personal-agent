@@ -210,6 +210,14 @@ async function main(): Promise<void> {
   const harness = new CodingHarness({ gateway, model: config.model });
 
   // ---- Orchestrator ----
+  // ---- 能力注册表 + Factory（ADR-011：能力闭环运行时）----
+  const capDbPath = process.env.JARVIS_CAP_DB
+    ?? path.join(os.homedir(), ".local/share/jarvis/capabilities.db");
+  const capSkillsRoot = process.env.JARVIS_SKILLS_ROOT
+    ?? path.join(os.homedir(), ".local/share/jarvis/skills");
+  const capRegistry = new CapabilityRegistry({ dbPath: capDbPath, skillsRoot: capSkillsRoot });
+  const skillFactory = new SkillFactory({ registry: capRegistry, skillsRoot: capSkillsRoot });
+
   const orch = new Orchestrator({
     gateway,
     memory,
@@ -221,6 +229,8 @@ async function main(): Promise<void> {
       void context.sampleFrom(foreground).catch(() => undefined);
       return context.currentContext(30);
     },
+    capabilitiesProvider: () => capRegistry.list({ enabledOnly: true })
+      .map((c) => ({ name: c.name, kind: c.kind, description: c.description, enabled: c.enabled === 1 })),
   });
 
   // ---- 对话 Gateway ----
@@ -445,6 +455,25 @@ async function main(): Promise<void> {
     const d = turn.decision;
 
     // 2. 按决策执行
+    if (d.type === "capability_gap" && d.gap) {
+      // 能力缺口：自动生成骨架（staging，零权限、不注册），等用户审批
+      console.log(`〔我还不会这件事——已生成能力骨架，等你批准后开发〕`);
+      console.log(`  需求：${d.gap.need}`);
+      try {
+        const draft = skillFactory.draft(d.gap);
+        console.log(`  骨架：${draft.dir}`);
+        console.log(`  申请权限：${draft.permissionRequest.length} 项（骨架恒零）`);
+        console.log(`  批准：jarvis factory approve ${draft.name}`);
+        console.log(`  拒绝：jarvis factory reject ${draft.name}`);
+        console.log(`\n${d.text}`);
+      } catch (e) {
+        // 同名骨架已存在等审批：直接指路
+        console.log(`  （骨架已存在：${(e as Error).message}）`);
+        console.log(`\n${d.text}`);
+      }
+      memory.appendMessage(conversationId, "assistant", d.text);
+      return;
+    }
     if (d.type === "create_task" && turn.task) {
       const t = turn.task;
       // 权限裁决：任务执行
