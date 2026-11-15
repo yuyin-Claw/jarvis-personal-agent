@@ -161,3 +161,27 @@
 - 代价：Factory 复用 CodingHarness（不自建代码生成栈）；Skill MVP 限
   TypeScript/Shell；能力质量依赖测试契约的严格程度。
 - 状态：已接受（2026-11-15 用户裁决方向：发版后启动 0.4）
+
+**ADR-012: 实时麦克风语音链路（live listening）**
+- 场景：v0.2.1 前所有 ASR 都是「音频文件 → /asr」，无实时交互能力；用户要求
+  补齐「说一句→识别一句→回应」的免提体验（此前明确列出的验证缺口之首）。
+- 决策：
+  - voice-service 新增 live 模块（零依赖）：/listen/start 拉起 pw-record
+    （16k mono s16 raw，输出文件为位置参数）持续采集 → 能量 VAD 分段
+    （20ms 窗 RMS ≥350 开段、静默 ≥800ms 收段、<300ms 爆音丢弃、30s 上限）
+    → 分段 WAV 封装 → 复用既有本地 ASR（whisper.cpp）→ 事件流
+    （speech_start/transcribing/final/speech_discard/listening_*）
+  - /listen/status?since= 供增量轮询；/listen/stop 幂等清理
+  - VAD 段时长以音频字节数换算（墙上时钟在批量 tick 中不流逝，会把 600ms
+    误判为 0ms 丢弃——实测踩坑）
+  - Core speechInput 增加 startLive/stopLive：speech_start→partial（触发
+    TTS 打断）、final→final（进 thinking）；轮询失败不中断（下轮重试）
+  - 验证通道持久化：guest 内 jarvis-bridge-agent systemd user unit
+    （固定端口 9222，id 双层 base64 协议），宿主 gexec.sh 经 WAIT 模式对接；
+    一次部署永久有效，取代脆弱的键盘注入
+- 验收（guest 内真实链路）：
+  - pw-record 采集 PipeWire null-sink monitor（jarvis-mic）；
+    pw-play 播 fixture 模拟说话 → VAD 分段 → whisper.cpp 转写出文本 →
+    final 事件 → E2E_LIVE_PASS
+  - 宿主全量 234 测试绿（live 模块 5 + Core live 接线 3）
+- 状态：已接受（2026-11-15）

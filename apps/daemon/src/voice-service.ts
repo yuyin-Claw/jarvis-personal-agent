@@ -65,6 +65,30 @@ export class VoiceServiceClient {
     return j.text ?? "";
   }
 
+  /** ADR-012 实时监听：启动/状态轮询/停止 */
+  async listenStart(target?: string): Promise<{ live: boolean; state: string }> {
+    const r = await this.doFetch(`${this.base}/listen/start`, {
+      method: "POST",
+      headers: { "content-type": "application/json" },
+      body: JSON.stringify({ target: target ?? null }),
+    });
+    const j = (await r.json()) as { ok: boolean; error?: string; live?: boolean; state?: string };
+    if (!r.ok || !j.ok) throw new Error(j.error ?? `listen/start ${r.status}`);
+    return { live: !!j.live, state: j.state ?? "listening" };
+  }
+
+  async listenStatus(since = 0): Promise<LiveStatus> {
+    const r = await this.doFetch(`${this.base}/listen/status?since=${since}`);
+    const j = (await r.json()) as { ok: boolean } & LiveStatus;
+    if (!r.ok || !j.ok) throw new Error(`listen/status ${r.status}`);
+    return j;
+  }
+
+  async listenStop(): Promise<void> {
+    const r = await this.doFetch(`${this.base}/listen/stop`, { method: "POST" });
+    if (!r.ok) throw new Error(`listen/stop ${r.status}`);
+  }
+
   async synthesize(text: string, opts: { voice?: string; rate?: number } = {}, signal?: AbortSignal): Promise<{ audio: Buffer; format: string; sampleRate: number }> {
     const r = await this.doFetch(`${this.base}/tts`, {
       method: "POST",
@@ -175,6 +199,14 @@ export class VoiceServiceSpeechOutput implements SpeechOutputAdapter {
   }
 }
 
+/** /listen/status 载荷（ADR-012 实时监听） */
+export interface LiveStatus {
+  live: boolean;
+  state: string;
+  target: string | null;
+  events: Array<{ type: string; at: number; text?: string; id?: number; error?: string }>;
+}
+
 /** speechInput 端点：音频 → /asr → partial/final 事件（与 SpeechInput JSONL 语义一致） */
 export class VoiceServiceSpeechInput implements SpeechInputAdapter {
   readonly id: AdapterId;
@@ -207,6 +239,57 @@ export class VoiceServiceSpeechInput implements SpeechInputAdapter {
   async stop(): Promise<void> {
     this.running = false;
     this.inUtterance = false;
+    await this.stopLive().catch(() => undefined);
+  }
+
+  // ---- ADR-012 实时监听：轮询 /listen/status 并翻译为 SpeechInputEvent ----
+  private liveTimer: ReturnType<typeof setInterval> | null = null;
+  private liveSince = 0;
+
+  /** 启动实时监听（麦克风经 guest 内 PipeWire 采集 + VAD + 本地 ASR） */
+  async startLive(target?: string, pollMs = 400): Promise<void> {
+    if (this.liveTimer) return;
+    await this.client.listenStart(target);
+    this.liveSince = Date.now();
+    this.emit({ type: "ready" });
+    this.liveTimer = setInterval(() => {
+      void this.pollLive();
+    }, pollMs);
+  }
+
+  async stopLive(): Promise<void> {
+    if (!this.liveTimer) return;
+    clearInterval(this.liveTimer);
+    this.liveTimer = null;
+    await this.client.listenStop();
+  }
+
+  private async pollLive(): Promise<void> {
+    let st: LiveStatus;
+    try {
+      st = await this.client.listenStatus(this.liveSince);
+    } catch {
+      return; // 服务暂不可达：下轮再试，不中断监听
+    }
+    for (const ev of st.events) {
+      this.liveSince = Math.max(this.liveSince, ev.at);
+      switch (ev.type) {
+        // VAD 检测到人声：立即 partial（空文本）→ 触发打断 TTS / 切 listening
+        case "speech_start":
+          if (!this.inUtterance) {
+            this.inUtterance = true;
+            this.emit({ type: "partial", text: "" });
+          }
+          break;
+        // 一段转写完成：final → 结束聆听进 thinking
+        case "final":
+          if (ev.text) this.emit({ type: "final", text: ev.text });
+          this.inUtterance = false;
+          break;
+        default:
+          break; // transcribing/speech_discard/listening_* 为诊断事件，不映射
+      }
+    }
   }
 
   /** 只做识别不派事件，供流式分段（partial/final）编排使用 */

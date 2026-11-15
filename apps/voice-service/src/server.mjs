@@ -16,6 +16,7 @@
 import http from "node:http";
 import { CONTRACT_VERSION, ENDPOINTS, MAX_AUDIO_BYTES, MAX_TEXT_CHARS, envelope, sanitizeText } from "./contract.mjs";
 import { createBackend } from "./backends.mjs";
+import { LiveListener } from "./live.mjs";
 
 function arg(name) {
   const i = process.argv.indexOf(`--${name}`);
@@ -26,6 +27,7 @@ const backend = createBackend(arg("backend") ?? process.env.JARVIS_VOICE_BACKEND
   ...process.env,
   ...(arg("upstream") ? { JARVIS_VOICE_UPSTREAM: arg("upstream") } : {}),
 });
+const live = new LiveListener(backend);
 const port = Number(arg("port") ?? process.env.JARVIS_VOICE_PORT ?? 8787);
 const host = arg("host") ?? process.env.JARVIS_VOICE_HOST ?? "0.0.0.0";
 
@@ -67,6 +69,7 @@ const server = http.createServer(async (req, res) => {
       platform: d.platform, asr: d.asr, tts: d.tts,
       upstream: d.upstream ?? null,
       ready: !!d.asr.ready && !!d.tts.ready,
+      live: live.describe(),
       pid: process.pid,
     }));
     return;
@@ -76,6 +79,30 @@ const server = http.createServer(async (req, res) => {
       limits: { maxAudioBytes: MAX_AUDIO_BYTES, maxTextChars: MAX_TEXT_CHARS } }));
     return;
   }
+  // ---- 实时监听（ADR-012）----
+  if (route.startsWith("listen/")) {
+    if (route === "listen/start" && req.method === "POST") {
+      let body = {};
+      try { body = JSON.parse((await readBody(req)) || "{}"); } catch { body = {}; }
+      try {
+        const st = await live.start(body.target ?? null);
+        json(res, 200, envelope(true, st));
+      } catch (e) { json(res, 409, envelope(false, { error: e.message })); }
+      return;
+    }
+    if (route === "listen/status" && req.method === "GET") {
+      const since = Number(url.searchParams.get("since") ?? 0);
+      json(res, 200, envelope(true, live.status(since)));
+      return;
+    }
+    if (route === "listen/stop" && req.method === "POST") {
+      json(res, 200, envelope(true, await live.stop()));
+      return;
+    }
+    json(res, 404, envelope(false, { error: `未知监听端点：${route}` }));
+    return;
+  }
+
   if (req.method !== "POST" || (route !== "asr" && route !== "tts")) {
     json(res, 404, envelope(false, { error: `未知端点：${req.method} /${route}` }));
     return;

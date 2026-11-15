@@ -152,6 +152,8 @@ export async function createGuestBridge(opts = {}) {
   let seq = 0;
   /** 命令 id → 回调；结果按 id 精确匹配，杜绝轮询双通道的响应错配 */
   const waiters = new Map();
+  /** 旧格式（无 id）命令队列：迁移期喂给驻留的旧协议代理 */
+  const legacyQueue = [];
   const log = opts.quiet ? () => {} : (...a) => console.log(...a);
   // 反向 HTTP 代理：host → (轮询命令) → guest → guest 内服务 → 结果回传
   const proxyJobs = new Map();
@@ -168,6 +170,12 @@ export async function createGuestBridge(opts = {}) {
       return;
     }
     if (req.url === "/cmd") {
+      // 旧格式迁移命令优先（供磁盘持久化的旧协议代理执行）
+      if (legacyQueue.length) {
+        res.writeHead(200, { "content-type": "text/plain" });
+        res.end(legacyQueue.shift());
+        return;
+      }
       const next = queue.shift();
       res.writeHead(200, { "content-type": "text/plain" });
       res.end(next
@@ -210,11 +218,19 @@ export async function createGuestBridge(opts = {}) {
       req.on("end", () => {
         res.writeHead(200); res.end("ok");
         if (process.env.JARVIS_BRIDGE_DEBUG) console.log("[bridge][out-body]", JSON.stringify(body.slice(0, 200)));
-        // 协议：首行 = base64(id)，其后为命令输出（末尾 __JARVIS_RC__<rc>）
+        // 协议：首行 = agent 回传的 id（对已部署 agent 是双重 base64；
+        // 新 agent 是单层 base64 明文）。两种都试解，匹配到 waiter 即成功。
         const nl = body.indexOf("\n");
         if (nl < 0) return;
         let id = "";
-        try { id = Buffer.from(body.slice(0, nl), "base64").toString("utf8"); } catch { return; }
+        const firstLine = body.slice(0, nl).trim();
+        if (!firstLine) return;
+        const candidates = [];
+        try { candidates.push(Buffer.from(firstLine, "base64").toString("utf8")); } catch { /* 忽略 */ }
+        try { candidates.push(Buffer.from(Buffer.from(firstLine, "base64").toString("utf8"), "base64").toString("utf8")); } catch { /* 忽略 */ }
+        candidates.push(firstLine);
+        for (const c of candidates) { if (waiters.has(c)) { id = c; break; } }
+        if (!id) return; // 无匹配 waiter：丢弃（诊断事件另走 debug 日志）
         const rest = body.slice(nl + 1);
         const m = rest.match(/\n__JARVIS_RC__(-?\d+)\s*$/);
         const out = m ? rest.slice(0, m.index) : rest;
@@ -246,7 +262,8 @@ export async function createGuestBridge(opts = {}) {
     });
     return;
   });
-  await new Promise((resolve) => server.listen(0, "0.0.0.0", resolve));
+  const fixedPort = Number(process.env.JARVIS_BRIDGE_PORT ?? 0);
+await new Promise((resolve) => server.listen(fixedPort, "0.0.0.0", resolve));
   const port = server.address().port;
   log(`[bridge] HTTP :${port}  QMP ${qmpPath}`);
 
@@ -279,7 +296,37 @@ export async function createGuestBridge(opts = {}) {
   const readyId = `ready-${++seq}`;
   queue.push({ id: readyId, cmd: "printf bridge-ready" });
   let ready = false;
+  const noInject = !!process.env.JARVIS_BRIDGE_NO_INJECT;
+  // 迁移模式：guest 里可能驻留着旧协议代理（拉到新格式 payload 会把两行
+  // base64 当命令执行并回传无 id 结果）。先用旧格式下发一条迁移命令：
+  // 杀掉所有旧代理 → 立即拉新 /b 起新代理。旧代理回传无 id 结果会被
+  // /out 丢弃，迁移命令不需要 ack。
+  if (process.env.JARVIS_BRIDGE_MIGRATE) {
+    const port2 = port;
+    // 不杀旧代理（pkill 的模式会匹配执行者自身，把自己杀了后半段就断）：
+    // 旧代理 20 分钟空闲自愈会退出；这里只拉起新协议代理并行共存
+    const migrateCmd =
+      `nohup curl -s http://${GATEWAY_IP}:${port2}/b | sh > /dev/null 2>&1 < /dev/null & echo MIGRATED`;
+    const migratePayload = Buffer.from(migrateCmd).toString("base64");
+    // 伪装成宿主：直接在 /cmd 队列前插一条旧格式响应
+    legacyQueue.push(migratePayload);
+    log("[bridge] 旧格式迁移命令已入队（等待旧代理拉取执行）");
+    await new Promise((r) => setTimeout(r, 12_000));
+  }
+  const waitMode = !!process.env.JARVIS_BRIDGE_WAIT;
+  if (waitMode) {
+    log("[bridge] WAIT 模式：等待持久代理连入（部署 deploy-bridge-agent.sh 后自动就绪，最长 10 分钟）");
+    // 关键时序：先注册 waiter，后入队——agent 每秒拉取，命令入队后秒被
+    // 拉走执行，若 waiter 未注册回传会被 /out 丢弃，WAIT 永远等不到
+    queue.length = 0; // 丢弃启动早期入队的 ready（其回传已因 waiter 缺失被丢）
+    ready = await new Promise((resolve) => {
+      const timer = setTimeout(() => { waiters.delete(readyId); resolve(false); }, 600_000);
+      waiters.set(readyId, (r) => { clearTimeout(timer); resolve(r.out.includes("bridge-ready")); });
+      queue.push({ id: readyId, cmd: "printf bridge-ready" });
+    });
+  }
   for (let attempt = 1; attempt <= 3 && !ready; attempt++) {
+    if (noInject || waitMode) break; // WAIT 模式不注入
     if (attempt > 1) log(`[bridge] 第 ${attempt} 次重试注入`);
     await launch();
     ready = await new Promise((resolve) => {
