@@ -6,6 +6,10 @@ node_modules/
 dist/
 *.tsbuildinfo
 
+# Python
+__pycache__/
+*.py[cod]
+
 # 环境与凭证（凭证只入系统 Secret Service，不入仓库）
 .env
 .env.*

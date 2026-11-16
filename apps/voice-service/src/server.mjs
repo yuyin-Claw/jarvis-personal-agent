@@ -17,6 +17,7 @@ import http from "node:http";
 import { CONTRACT_VERSION, ENDPOINTS, MAX_AUDIO_BYTES, MAX_TEXT_CHARS, envelope, sanitizeText } from "./contract.mjs";
 import { createBackend } from "./backends.mjs";
 import { LiveListener } from "./live.mjs";
+import { voiceEnabled } from "./preferences.mjs";
 
 function arg(name) {
   const i = process.argv.indexOf(`--${name}`);
@@ -69,6 +70,7 @@ const server = http.createServer(async (req, res) => {
       platform: d.platform, asr: d.asr, tts: d.tts,
       upstream: d.upstream ?? null,
       ready: !!d.asr.ready && !!d.tts.ready,
+      voiceEnabled: voiceEnabled(),
       live: live.describe(),
       pid: process.pid,
     }));
@@ -105,6 +107,11 @@ const server = http.createServer(async (req, res) => {
 
   if (req.method !== "POST" || (route !== "asr" && route !== "tts")) {
     json(res, 404, envelope(false, { error: `未知端点：${req.method} /${route}` }));
+    return;
+  }
+
+  if (route === "tts" && !voiceEnabled()) {
+    json(res, 403, envelope(false, { error: "语音反馈已关闭", code: "VOICE_DISABLED" }));
     return;
   }
 

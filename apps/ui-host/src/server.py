@@ -26,6 +26,9 @@ from pathlib import Path
 from http.server import HTTPServer, BaseHTTPRequestHandler
 from urllib.parse import urlparse
 
+from settings import load_settings, update_preferences
+from agent_control import change_wake_word, control_agents, service_status
+
 HOME = Path.home()
 JARVIS_ROOT = HOME / ".local/share/jarvis"
 SETTINGS_FILE = JARVIS_ROOT / "settings.json"
@@ -44,6 +47,9 @@ class UIHostHandler(BaseHTTPRequestHandler):
         self.send_response(code)
         self.send_header("Content-Type", "application/json; charset=utf-8")
         self.send_header("Content-Length", str(len(body)))
+        self.send_header("Access-Control-Allow-Origin", "*")
+        self.send_header("Access-Control-Allow-Headers", "Content-Type")
+        self.send_header("Access-Control-Allow-Methods", "GET, POST, OPTIONS")
         self.end_headers()
         self.wfile.write(body)
 
@@ -53,12 +59,23 @@ class UIHostHandler(BaseHTTPRequestHandler):
             return {}
         return json.loads(self.rfile.read(length).decode("utf-8"))
 
+    def do_OPTIONS(self):
+        self._json(204, {})
+
     def do_GET(self):
         parsed = urlparse(self.path)
         path = parsed.path
 
         if path == "/health":
             self._json(200, {"ok": True, "service": "jarvis-ui-host", "windows": len(WINDOWS)})
+            return
+
+        if path == "/api/status":
+            self._json(200, {
+                "ok": True,
+                "settings": load_settings(),
+                "services": service_status(),
+            })
             return
 
         if path.startswith("/ui/result/"):
@@ -75,6 +92,35 @@ class UIHostHandler(BaseHTTPRequestHandler):
     def do_POST(self):
         parsed = urlparse(self.path)
         path = parsed.path
+
+        if path == "/api/agent":
+            try:
+                body = self._read_body()
+                result = control_agents(str(body.get("action", "")))
+                self._json(200 if result["ok"] else 500, result)
+            except Exception as e:
+                self._json(400, {"ok": False, "error": str(e)})
+            return
+
+        if path == "/api/wake-word":
+            try:
+                body = self._read_body()
+                result = change_wake_word(str(body.get("wakeWord", "")))
+                self._json(200, result)
+            except ValueError as e:
+                self._json(400, {"ok": False, "error": str(e)})
+            except Exception as e:
+                self._json(500, {"ok": False, "error": str(e)})
+            return
+
+        if path == "/api/preferences":
+            try:
+                body = self._read_body()
+                settings = update_preferences(body)
+                self._json(200, {"ok": True, "settings": settings})
+            except Exception as e:
+                self._json(400, {"ok": False, "error": str(e)})
+            return
 
         if path == "/ui/render":
             self._handle_render()
@@ -218,6 +264,14 @@ h1 {{ font-size: 20px; margin-bottom: 20px; color: #7b9cff; }}
   padding: 10px 14px; color: #eee; font-size: 14px; width: 100%;
 }}
 .actions {{ margin-top: 20px; text-align: right; }}
+.btn-secondary {{ background: #334155; }}
+.btn-secondary:hover {{ background: #475569; }}
+.btn:disabled {{ opacity: 0.45; cursor: wait; }}
+.message {{ min-height: 22px; margin: 12px 0; font-size: 13px; color: #7b9cff; }}
+.message.error {{ color: #f87171; }}
+.hint {{ color: #888; font-size: 12px; margin-top: 8px; line-height: 1.5; }}
+.toggle {{ width: 20px; height: 20px; accent-color: #7b9cff; }}
+code {{ color: #a5b4fc; word-break: break-all; }}
 </style>
 </head>
 <body>
@@ -228,7 +282,7 @@ h1 {{ font-size: 20px; margin-bottom: 20px; color: #7b9cff; }}
 </div>
 <script>
 function sendAction(actionId, data = null) {{
-  fetch('/ui/action/{window_id}', {{
+  fetch('http://127.0.0.1:8788/ui/action/{window_id}', {{
     method: 'POST',
     headers: {{'Content-Type': 'application/json'}},
     body: JSON.stringify({{action: actionId, data: data}})
@@ -242,36 +296,118 @@ function sendAction(actionId, data = null) {{
 
 
 def render_settings(data: dict) -> str:
-    """设置窗口"""
-    agent_status = data.get("agentStatus", {})
-    wake_word = data.get("wakeWord", "你好贾维斯")
-    voice_enabled = data.get("voiceEnabled", True)
-    notify_enabled = data.get("notifyEnabled", True)
-
-    def status_badge(active: bool) -> str:
-        return '<span class="status-on">● 运行中</span>' if active else '<span class="status-off">● 已停止</span>'
-
-    rows = ""
-    for name, active in agent_status.items():
-        rows += f'<div class="row"><span class="label">{name}</span><span class="value">{status_badge(active)}</span></div>'
-
-    return f"""
+    """设置窗口（真实 API：状态、启停、唤醒词、语音/通知开关）"""
+    return """
 <div class="card">
-  <h3>Agent 状态</h3>
-  {rows}
+  <div class="row"><h3>Agent 状态</h3><button class="btn btn-secondary setting-control" onclick="refreshStatus()">刷新</button></div>
+  <div class="row"><span class="label">jarvis-core</span><span class="value" id="state-core">读取中…</span></div>
+  <div class="row"><span class="label">jarvis-voice</span><span class="value" id="state-voice">读取中…</span></div>
+  <div class="row"><span class="label">jarvis-avatar</span><span class="value" id="state-avatar">读取中…</span></div>
+  <div class="hint">UI Host 与 bridge-agent 保持运行，因此 Agent 停用后仍可从这里重新激活。</div>
+  <div class="hint">基础设施：<span id="state-infra">读取中…</span></div>
+  <div class="actions" style="text-align:left">
+    <button class="btn setting-control" onclick="agentAction('start')">激活 Agent</button>
+    <button class="btn btn-secondary setting-control" onclick="agentAction('restart')">重启</button>
+    <button class="btn btn-danger setting-control" onclick="agentAction('stop')">停用</button>
+  </div>
 </div>
 <div class="card">
   <h3>唤醒词</h3>
-  <input class="input" id="wakeWord" value="{wake_word}" placeholder="输入唤醒词">
+  <div class="row"><input class="input setting-control" id="wakeWord" maxlength="8" placeholder="2-8 个汉字"></div>
+  <div class="actions" style="text-align:left"><button class="btn setting-control" onclick="saveWakeWord()">保存并生效</button></div>
+  <div class="hint">仅修改当前自定义唤醒词；旧词会失效。保存时自动校验模型并热重启语音服务，失败自动回滚。</div>
+  <div class="hint">音素：<code id="kwsTokens">尚未修改</code></div>
 </div>
 <div class="card">
-  <h3>语音反馈</h3>
-  <div class="row"><span class="label">启用</span><span class="value">{'开启' if voice_enabled else '关闭'}</span></div>
+  <h3>偏好</h3>
+  <div class="row"><span class="label">语音反馈（TTS）</span><input class="toggle setting-control" id="voiceEnabled" type="checkbox" onchange="savePreferences()"></div>
+  <div class="row"><span class="label">主动通知</span><input class="toggle setting-control" id="notifyEnabled" type="checkbox" onchange="savePreferences()"></div>
 </div>
-<div class="card">
-  <h3>主动通知</h3>
-  <div class="row"><span class="label">启用</span><span class="value">{'开启' if notify_enabled else '关闭'}</span></div>
-</div>
+<div class="message" id="message"></div>
+<script>
+const API = 'http://127.0.0.1:8788';
+let busy = false;
+
+async function api(path, options = {}) {
+  const response = await fetch(API + path, {
+    ...options,
+    headers: {'Content-Type': 'application/json', ...(options.headers || {})},
+  });
+  const body = await response.json();
+  if (!response.ok || body.ok === false) throw new Error(body.error || `HTTP ${response.status}`);
+  return body;
+}
+
+function showMessage(text, isError = false) {
+  const el = document.getElementById('message');
+  el.textContent = text;
+  el.className = 'message' + (isError ? ' error' : '');
+}
+
+function setBusy(value) {
+  busy = value;
+  document.querySelectorAll('.setting-control').forEach(el => { el.disabled = value; });
+}
+
+function badge(active) {
+  return active ? '<span class="status-on">● 运行中</span>' : '<span class="status-off">● 已停止</span>';
+}
+
+async function refreshStatus() {
+  if (busy) return;
+  try {
+    const j = await api('/api/status');
+    for (const [id, name] of [['state-core', 'jarvis-core'], ['state-voice', 'jarvis-voice'], ['state-avatar', 'jarvis-avatar']]) {
+      document.getElementById(id).innerHTML = badge(j.services[name].active);
+    }
+    document.getElementById('state-infra').textContent =
+      `bridge ${j.services['jarvis-bridge-agent'].state} · UI Host ${j.services['jarvis-ui-host'].state}`;
+    const wake = document.getElementById('wakeWord');
+    if (document.activeElement !== wake) wake.value = j.settings.wakeWord;
+    document.getElementById('voiceEnabled').checked = j.settings.voiceEnabled;
+    document.getElementById('notifyEnabled').checked = j.settings.notifyEnabled;
+  } catch (e) {
+    showMessage(`状态读取失败：${e.message}`, true);
+  }
+}
+
+async function runAction(fn) {
+  if (busy) return;
+  setBusy(true);
+  try { await fn(); }
+  catch (e) { showMessage(e.message, true); }
+  finally { setBusy(false); await refreshStatus(); }
+}
+
+async function agentAction(action) {
+  if (action === 'stop' && !confirm('确定停用 core、voice 和 avatar 吗？设置窗口会保持可用。')) return;
+  await runAction(async () => {
+    await api('/api/agent', {method: 'POST', body: JSON.stringify({action})});
+    showMessage(action === 'stop' ? 'Agent 已停用' : 'Agent 已恢复运行');
+  });
+}
+
+async function saveWakeWord() {
+  const wakeWord = document.getElementById('wakeWord').value.trim();
+  await runAction(async () => {
+    showMessage('正在校验模型并重启语音服务…');
+    const j = await api('/api/wake-word', {method: 'POST', body: JSON.stringify({wakeWord})});
+    document.getElementById('kwsTokens').textContent = j.tokens;
+    showMessage(j.voiceRestarted ? '唤醒词已保存并生效' : '唤醒词已保存，语音启动后生效');
+  });
+}
+
+async function savePreferences() {
+  const voiceEnabled = document.getElementById('voiceEnabled').checked;
+  const notifyEnabled = document.getElementById('notifyEnabled').checked;
+  await runAction(async () => {
+    await api('/api/preferences', {method: 'POST', body: JSON.stringify({voiceEnabled, notifyEnabled})});
+    showMessage('偏好已保存');
+  });
+}
+
+refreshStatus();
+</script>
 """
 
 

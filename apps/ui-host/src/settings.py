@@ -1,24 +1,12 @@
 #!/usr/bin/env python3
-"""JARVIS 设置读写（settings.json）。
-
-设置项：
-- wakeWord：唤醒词（默认「你好贾维斯」）
-- voiceEnabled：语音反馈（默认 true）
-- notifyEnabled：主动通知（默认 true）
-- agentAutoStart：agent 开机自启（默认 true）
-
-用法：
-    from settings import load_settings, save_settings
-    settings = load_settings()
-    settings["wakeWord"] = "你好小贾"
-    save_settings(settings)
-"""
+"""JARVIS 设置持久化（settings.json，原子写入）。"""
 import json
+import os
 from pathlib import Path
 
 HOME = Path.home()
-JARVIS_ROOT = HOME / ".local/share/jarvis"
-SETTINGS_FILE = JARVIS_ROOT / "settings.json"
+JARVIS_ROOT = Path(os.environ.get("JARVIS_ROOT", str(HOME / ".local/share/jarvis")))
+SETTINGS_FILE = Path(os.environ.get("JARVIS_SETTINGS_FILE", str(JARVIS_ROOT / "settings.json")))
 
 DEFAULT_SETTINGS = {
     "wakeWord": "你好贾维斯",
@@ -28,29 +16,33 @@ DEFAULT_SETTINGS = {
 }
 
 
-def load_settings() -> dict:
-    """加载设置（不存在则返回默认值）"""
-    if not SETTINGS_FILE.exists():
+def load_settings(path: Path | None = None) -> dict:
+    """加载设置；文件不存在或损坏时返回默认值。"""
+    target = path or SETTINGS_FILE
+    if not target.exists():
         return DEFAULT_SETTINGS.copy()
     try:
-        return {**DEFAULT_SETTINGS, **json.loads(SETTINGS_FILE.read_text(encoding="utf-8"))}
+        return {**DEFAULT_SETTINGS, **json.loads(target.read_text(encoding="utf-8"))}
     except Exception:
         return DEFAULT_SETTINGS.copy()
 
 
-def save_settings(settings: dict):
-    """保存设置"""
-    SETTINGS_FILE.parent.mkdir(parents=True, exist_ok=True)
-    SETTINGS_FILE.write_text(json.dumps(settings, ensure_ascii=False, indent=2), encoding="utf-8")
+def save_settings(settings: dict, path: Path | None = None):
+    """原子保存设置，避免进程中断留下半个 JSON 文件。"""
+    target = path or SETTINGS_FILE
+    target.parent.mkdir(parents=True, exist_ok=True)
+    tmp = target.with_suffix(target.suffix + ".tmp")
+    tmp.write_text(json.dumps(settings, ensure_ascii=False, indent=2) + "\n", encoding="utf-8")
+    tmp.replace(target)
 
 
-def get_wake_word() -> str:
-    """获取唤醒词"""
-    return load_settings()["wakeWord"]
-
-
-def set_wake_word(word: str):
-    """设置唤醒词"""
+def update_preferences(values: dict) -> dict:
+    """更新语音/通知开关，只允许布尔值，忽略其他键。"""
     settings = load_settings()
-    settings["wakeWord"] = word
+    for key in ("voiceEnabled", "notifyEnabled", "agentAutoStart"):
+        if key in values:
+            if not isinstance(values[key], bool):
+                raise ValueError(f"{key} 必须是布尔值")
+            settings[key] = values[key]
     save_settings(settings)
+    return settings

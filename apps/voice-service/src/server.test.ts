@@ -1,10 +1,15 @@
 import { afterAll, beforeAll, describe, expect, it } from "vitest";
 import { spawn, type ChildProcess } from "node:child_process";
 import { fileURLToPath } from "node:url";
+import fs from "node:fs";
+import os from "node:os";
+import path from "node:path";
 
 const serverPath = fileURLToPath(new URL("./server.mjs", import.meta.url));
 let proc: ChildProcess;
 let base = "";
+let settingsDir = "";
+let settingsFile = "";
 
 async function post(route: string, body: unknown) {
   return fetch(`${base}/${route}`, {
@@ -15,8 +20,12 @@ async function post(route: string, body: unknown) {
 }
 
 beforeAll(async () => {
+  settingsDir = fs.mkdtempSync(path.join(os.tmpdir(), "jarvis-voice-settings-"));
+  settingsFile = path.join(settingsDir, "settings.json");
+  fs.writeFileSync(settingsFile, JSON.stringify({ voiceEnabled: true }));
   proc = spawn(process.execPath, [serverPath, "--backend", "fake", "--port", "0"], {
     stdio: ["ignore", "pipe", "pipe"],
+    env: { ...process.env, JARVIS_SETTINGS_FILE: settingsFile },
   });
   let out = "";
   proc.stdout?.on("data", (c) => { out += String(c); });
@@ -32,6 +41,7 @@ beforeAll(async () => {
 
 afterAll(async () => {
   proc?.kill("SIGTERM");
+  if (settingsDir) fs.rmSync(settingsDir, { recursive: true, force: true });
 });
 
 describe("语音服务契约 v1", () => {
@@ -73,6 +83,21 @@ describe("语音服务契约 v1", () => {
     expect(wav.toString("ascii", 8, 12)).toBe("WAVE");
     expect(wav.length).toBeGreaterThan(1000);
     expect(j.format).toBe("wav");
+  });
+
+  it("voiceEnabled=false 时 TTS 返回 403，恢复后无需重启即生效", async () => {
+    try {
+      fs.writeFileSync(settingsFile, JSON.stringify({ voiceEnabled: false }));
+      const disabled = await post("tts", { text: "不应播放" });
+      expect(disabled.status).toBe(403);
+      const body = await disabled.json();
+      expect(body.code).toBe("VOICE_DISABLED");
+      const health = await (await fetch(`${base}/health`)).json();
+      expect(health.voiceEnabled).toBe(false);
+    } finally {
+      fs.writeFileSync(settingsFile, JSON.stringify({ voiceEnabled: true }));
+    }
+    expect((await post("tts", { text: "恢复播放" })).status).toBe(200);
   });
 
   it("缺 audio / 空 text 返回结构化错误，不崩溃", async () => {

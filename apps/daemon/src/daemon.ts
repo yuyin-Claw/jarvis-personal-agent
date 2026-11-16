@@ -26,6 +26,7 @@ import { CapabilityRegistry } from "@jarvis/capability-registry";
 import { loadConfig } from "./config.js";
 import { initPlatform } from "./platform.js";
 import { createEmbodiedRuntime } from "./embodied.js";
+import { PreferenceNotifyChannel } from "./preferences.js";
 
 /** 通知文件通道（跨进程可读：CLI/未来 UI 轮询此文件展示通知） */
 class FileNotifyChannel implements NotifyChannel {
@@ -120,12 +121,15 @@ async function main(): Promise<void> {
   // ---- Continuous Runtime ----
   const rt = new ContinuousRuntime({
     channels: [
-      new StdoutNotifyChannel(),
-      new FileNotifyChannel(notifyFile),
-      new PlatformNotifyChannel((n) =>
-        platform.notification.send({ title: "JARVIS", text: n.text, priority: n.priority }),
+      new PreferenceNotifyChannel(new StdoutNotifyChannel(), path.join(dataDir, "settings.json")),
+      new PreferenceNotifyChannel(new FileNotifyChannel(notifyFile), path.join(dataDir, "settings.json")),
+      new PreferenceNotifyChannel(
+        new PlatformNotifyChannel((n) =>
+          platform.notification.send({ title: "JARVIS", text: n.text, priority: n.priority }),
+        ),
+        path.join(dataDir, "settings.json"),
       ),
-      embodied.proactive, // 数字人主动开口（idle 才播，忙时排队）
+      new PreferenceNotifyChannel(embodied.proactive, path.join(dataDir, "settings.json")),
     ],
     policy: {
       dedupeCooldownMs: 3_600_000, // 同主题 1 小时最多提醒一次
