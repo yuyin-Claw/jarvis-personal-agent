@@ -481,6 +481,41 @@ async function main(): Promise<void> {
     const d = turn.decision;
 
     // 2. 按决策执行
+    if (d.type === "invoke_capability" && d.invoke) {
+      // 已注册能力的真实执行（能力闭环最后一环：对话→能力→结果）
+      const { SkillRunner } = await import("@jarvis/capability-registry");
+      const runner = new SkillRunner(capSkillsRoot);
+      try {
+        const rec = capRegistry.findByName(d.invoke.name);
+        if (!rec) {
+          console.log(`〔能力未注册：${d.invoke.name}〕`);
+          output.write(d.text + "\n");
+          memory.appendMessage(conversationId, "user", text);
+          memory.appendMessage(conversationId, "assistant", d.text);
+          return;
+        }
+        if (d.text) console.log(`〔${d.text}〕`);
+        const result = await runner.run(d.invoke.name, { args: d.invoke.args ?? {} });
+        // RunResult.output 是 skill 的 stdout JSON：{ok, implemented, result}
+        const r = (result.output ?? {}) as { ok?: boolean; implemented?: boolean; result?: { speech?: string }; error?: string };
+        let reply: string;
+        if (r.ok && r.result?.speech) {
+          reply = r.result.speech;
+        } else if (r.ok) {
+          reply = JSON.stringify(r.result ?? r, null, 2);
+        } else {
+          reply = `能力执行失败：${r.error ?? result.stderr ?? "未知错误"}`;
+        }
+        console.log(reply);
+        memory.appendMessage(conversationId, "user", text);
+        memory.appendMessage(conversationId, "assistant", reply);
+      } catch (e) {
+        const msg = `能力执行异常：${(e as Error).message}`;
+        console.log(msg);
+        memory.appendMessage(conversationId, "assistant", msg);
+      }
+      return;
+    }
     if (d.type === "capability_gap" && d.gap) {
       // 能力缺口：自动生成骨架（staging，零权限、不注册），等用户审批
       console.log(`〔我还不会这件事——已生成能力骨架，等你批准后开发〕`);

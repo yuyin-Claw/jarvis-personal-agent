@@ -16,6 +16,7 @@ export type DecisionType =
   | "ask" // 追问用户（信息不足）
   | "create_task" // 创建任务委派 Harness（0.1 尚无 Harness 时也可建任务挂起）
   | "continue_task" // 继续既有任务
+  | "invoke_capability" // 调用已注册能力（能力清单可完成时优先执行）
   | "capability_gap"; // 能力缺口：用户诉求超出已注册能力（ADR-011 0.4 分支）
 
 export interface Decision {
@@ -26,6 +27,13 @@ export interface Decision {
   task?: { title: string; goal: string; requiresApproval: boolean };
   /** continue_task 时 */
   taskId?: string;
+  /** invoke_capability 时：目标能力与参数 */
+  invoke?: {
+    /** 已注册能力名（必须来自能力清单） */
+    name: string;
+    /** 传给能力的参数（JSON 对象） */
+    args?: Record<string, unknown>;
+  };
   /** capability_gap 时：缺口报告（供审批与 Factory 开发依据） */
   gap?: {
     /** 用户诉求的一句话描述 */
@@ -94,6 +102,7 @@ ${openList}
 {"type":"ask","text":"..."}                           — 追问（信息不足以行动，一次最多 1-2 个问题）
 {"type":"create_task","text":"...","task":{"title":"...","goal":"...","requiresApproval":false}} — 委派开发/执行类工作
 {"type":"continue_task","text":"...","taskId":"..."}  — 用户想继续上述进行中任务之一
+{"type":"invoke_capability","text":"（调用前的简短说明，一句话）","invoke":{"name":"能力清单中的名字","args":{...}}} — 用户诉求能被已注册能力清单中的某个能力直接完成时，**必须优先**选此类型并指定该能力
 {"type":"capability_gap","text":"...","gap":{"need":"...","suggestedKind":"skill","suggestedName":"kebab-case-name"}} — 用户要求一个具体动作，但已注册能力清单完全覆盖不了（需先经用户批准再开发）
 
 判断规则：
@@ -101,6 +110,7 @@ ${openList}
 - 模糊指代（"继续"、"刚才那个"）且无进行中任务 → ask 澄清
 - 长期记忆中有能回答用户问题的内容时，在 text 中使用它
 - 用户说"这个/刚才那个文件"等指代时，可结合环境上下文推断
+- 重要：已注册能力清单中的能力若标注「已实现」或「可直接调用」，且与用户诉求匹配，**必须**用 invoke_capability 而不是 capability_gap——能力已经存在，不要说"我还不会"
 - capability_gap 仅用于「可复用的运行时能力」诉求：换壁纸/清理缓存/定时提醒/查天气这类"以后还会再做"的系统动作，且已注册能力清单（若有）完全无法完成；纯问答永远 answer
 - 注意区分：写代码/改代码/建工程等开发工作 → create_task（委派 Harness）；只有"让 JARVIS 本身学会一个可重复执行的系统动作"才是 capability_gap
 - text 字段始终是面向用户的话（中文）`;
@@ -239,6 +249,18 @@ export class Orchestrator {
             text: String(obj.text ?? "继续该任务。"),
             taskId: obj.taskId ? String(obj.taskId) : undefined,
           };
+        case "invoke_capability": {
+          const inv = (obj as { invoke?: { name?: string; args?: Record<string, unknown> } }).invoke;
+          if (!inv?.name) {
+            // 缺能力名无法执行，降级为 answer（如实说明）
+            return { type: "answer", text: String(obj.text ?? "") };
+          }
+          return {
+            type: "invoke_capability",
+            text: String(obj.text ?? ""),
+            invoke: { name: String(inv.name), args: inv.args ?? {} },
+          };
+        }
         case "capability_gap": {
           const g = (obj as { gap?: { need?: string; suggestedKind?: string; suggestedName?: string } }).gap ?? {};
           return {
