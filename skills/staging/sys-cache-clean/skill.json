@@ -1,7 +1,7 @@
 {
   "name": "sys-cache-clean",
   "version": "0.1.0",
-  "description": "（Factory 骨架，待实现）每日定时自动清理系统缓存（临时文件/浏览器缓存/包管理器缓存），含定时调度",
+  "description": "系统缓存清理：扫描 ~/.cache / npm / pnpm / macOS Caches / jarvis 临时文件，按大小排序，dry-run 默认；真删需 confirm:true + fs_delete 权限",
   "entry": {
     "command": "./main.sh"
   },
@@ -10,33 +10,60 @@
     "properties": {
       "args": {
         "type": "object",
-        "description": "能力参数"
+        "properties": {
+          "dryRun": { "type": "boolean", "description": "默认 true；false 才真删" },
+          "confirm": { "type": "boolean", "description": "真删必须为 true（高危操作二次确认）" },
+          "targets": { "type": "array", "items": { "type": "string" }, "description": "限定扫描目标（默认全部）" },
+          "minSizeMB": { "type": "number", "description": "小于该大小的目录跳过（默认 1MB）" }
+        }
       }
     }
   },
   "output": {
     "type": "object",
     "properties": {
-      "ok": {
-        "type": "boolean"
-      },
-      "implemented": {
-        "type": "boolean",
-        "description": "骨架恒 false；实现后置 true"
-      },
+      "ok": { "type": "boolean" },
+      "implemented": { "type": "boolean" },
       "result": {
-        "type": "object"
+        "type": "object",
+        "properties": {
+          "dryRun": { "type": "boolean" },
+          "scannedAt": { "type": "string" },
+          "targets": {
+            "type": "array",
+            "items": {
+              "type": "object",
+              "properties": {
+                "path": { "type": "string" },
+                "sizeMB": { "type": "number" },
+                "fileCount": { "type": "number" },
+                "deleted": { "type": "boolean" },
+                "skipped": { "type": "string" }
+              }
+            }
+          },
+          "totalSizeMB": { "type": "number" },
+          "totalFiles": { "type": "number" },
+          "deletedCount": { "type": "number" },
+          "speech": { "type": "string" }
+        }
       }
     }
   },
   "smoke": {
-    "input": {
-      "args": {}
-    },
-    "expect": {
-      "ok": true,
-      "implemented": false
-    }
+    "input": { "args": { "dryRun": true } },
+    "expect": { "ok": true, "implemented": true }
   },
-  "permissions": []
+  "permissions": [
+    { "capability": "fs_read", "resource": "~/.cache", "mode": "read" },
+    { "capability": "fs_read", "resource": "~/.npm/_cacache", "mode": "read" },
+    { "capability": "fs_read", "resource": "~/.pnpm-store", "mode": "read" },
+    { "capability": "fs_read", "resource": "~/Library/Caches", "mode": "read" },
+    { "capability": "fs_read", "resource": "/tmp/jarvis-*", "mode": "read" },
+    { "capability": "fs_delete", "resource": "~/.cache", "mode": "delete" },
+    { "capability": "fs_delete", "resource": "~/.npm/_cacache", "mode": "delete" },
+    { "capability": "fs_delete", "resource": "~/.pnpm-store", "mode": "delete" },
+    { "capability": "fs_delete", "resource": "~/Library/Caches", "mode": "delete" },
+    { "capability": "fs_delete", "resource": "/tmp/jarvis-*", "mode": "delete" }
+  ]
 }

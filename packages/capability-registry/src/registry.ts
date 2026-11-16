@@ -11,6 +11,7 @@
 import { spawn } from "node:child_process";
 import fs from "node:fs";
 import path from "node:path";
+import os from "node:os";
 import Database from "better-sqlite3";
 import { ALL_MIGRATIONS } from "./schema.js";
 import type { CapabilityRecord, Permission, RegisterInput, SkillManifest } from "./types.js";
@@ -156,6 +157,9 @@ export class CapabilityRegistry {
    * 授予权限（用户批准的申请单路径）。
    * 红线：必须在 skill.json 的 permissions 数组中已声明（防止越权授予未声明权限）。
    * 幂等：完全相同的 (capability, resource, mode) 已存在则不重复追加。
+   *
+   * resource 路径归一化：`~` 前缀与绝对路径等价（~/.cache ≡ /Users/<user>/.cache）。
+   * 这样用户 grant 时 shell 把 ~ 展开成绝对路径也能匹配声明。
    */
   grantPermission(name: string, permission: Permission): { ok: boolean; reason?: string } {
     const cap = this.findByName(name);
@@ -163,10 +167,11 @@ export class CapabilityRegistry {
     const manifest = this.loadManifest(name);
     if (!manifest) return { ok: false, reason: `skill.json 缺失：${name}` };
     const declared = (manifest.permissions ?? []) as Permission[];
+    const normalizedInput = normalizePermission(permission);
     const isDeclared = declared.some(
-      (d) => d.capability === permission.capability
-        && d.resource === permission.resource
-        && d.mode === permission.mode,
+      (d) => d.capability === normalizedInput.capability
+        && normalizeResource(d.resource) === normalizedInput.resource
+        && d.mode === normalizedInput.mode,
     );
     if (!isDeclared) {
       return {
@@ -177,23 +182,25 @@ export class CapabilityRegistry {
     }
     const current = cap.permissions as Permission[];
     const already = current.some(
-      (p) => p.capability === permission.capability
-        && p.resource === permission.resource
-        && p.mode === permission.mode,
+      (p) => p.capability === normalizedInput.capability
+        && normalizeResource(p.resource) === normalizedInput.resource
+        && p.mode === normalizedInput.mode,
     );
     if (already) return { ok: true, reason: "权限已存在（幂等）" };
-    const next = [...current, permission];
+    // 落库时使用归一化后的 resource（~ 前缀规范形式），保持声明与授予一致
+    const next = [...current, normalizedInput];
     this.db.prepare("UPDATE capabilities SET permissions = ? WHERE name = ? AND version = ?")
       .run(JSON.stringify(next), cap.name, cap.version);
     return { ok: true };
   }
 
-  /** 撤销权限（按 capability + resource 精确匹配，mode 任意）。撤销总是允许（不需声明校验）。 */
+  /** 撤销权限（按 capability + resource 精确匹配，mode 任意）。resource 同样归一化比较。 */
   revokePermission(name: string, capability: string, resource: string): { ok: boolean; removed: number; reason?: string } {
     const cap = this.findByName(name);
     if (!cap) return { ok: false, removed: 0, reason: `能力未注册：${name}` };
     const current = cap.permissions as Permission[];
-    const next = current.filter((p) => !(p.capability === capability && p.resource === resource));
+    const normalizedTarget = normalizeResource(resource);
+    const next = current.filter((p) => !(p.capability === capability && normalizeResource(p.resource) === normalizedTarget));
     const removed = current.length - next.length;
     if (removed === 0) return { ok: true, removed: 0, reason: "无匹配权限" };
     this.db.prepare("UPDATE capabilities SET permissions = ? WHERE name = ? AND version = ?")
@@ -293,4 +300,25 @@ export class SkillRunner {
       child.stdin?.end(JSON.stringify(input ?? {}));
     });
   }
+}
+
+/**
+ * 归一化 resource 路径：`~` 前缀统一展开为 homedir，再统一替换回 ~。
+ * 这样 `~/.cache` 与 `/Users/<user>/.cache` 与 `/home/<user>/.cache` 都等价。
+ * 网络资源（wttr.in:80）原样返回。
+ */
+function normalizeResource(resource: string): string {
+  // 网络资源（含 :port）不做路径处理
+  if (/^[^/]+\:\d+/.test(resource)) return resource;
+  const home = process.env.HOME ?? os.homedir();
+  // 绝对路径且以 home 开头 → 归一化为 ~ 前缀
+  if (resource.startsWith(home + "/")) {
+    return "~" + resource.slice(home.length);
+  }
+  // 已是 ~ 前缀 → 原样
+  return resource;
+}
+
+function normalizePermission(p: Permission): Permission {
+  return { capability: p.capability, resource: normalizeResource(p.resource), mode: p.mode };
 }

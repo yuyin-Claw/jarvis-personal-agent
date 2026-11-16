@@ -277,3 +277,84 @@ describe("registry.run 安全入口（ADR-011 红线：未授予权限拒绝执�
       .rejects.toThrow(/权限未授予/);
   });
 });
+
+describe("resource 路径归一化（~ 前缀与绝对路径等价）", () => {
+  const manifestHomePaths = {
+    name: "sys-cache-clean", version: "0.1.0",
+    entry: { command: "./main.sh" },
+    permissions: [
+      { capability: "fs_read", resource: "~/.cache", mode: "read" },
+      { capability: "fs_delete", resource: "~/.cache", mode: "delete" },
+    ],
+  };
+  const mainOk = `#!/bin/sh\ncat > /dev/null\necho '{"ok":true,"implemented":true,"result":{}}'\n`;
+  const home = process.env.HOME ?? os.homedir();
+
+  it("grant 传入绝对路径（shell 展开 ~ 后）也能匹配 ~ 前缀声明", () => {
+    writeSkill("sys-cache-clean", manifestHomePaths, mainOk);
+    registry.register({ name: "sys-cache-clean", version: "0.1.0", kind: "skill", entry: "sys-cache-clean" });
+    // shell 把 ~ 展开成绝对路径传入
+    const r = registry.grantPermission("sys-cache-clean", {
+      capability: "fs_read", resource: `${home}/.cache`, mode: "read",
+    });
+    expect(r.ok).toBe(true);
+    // 落库的 resource 归一化为 ~ 前缀
+    const granted = registry.getPermissions("sys-cache-clean");
+    expect(granted).toHaveLength(1);
+    expect(granted[0].resource).toBe("~/.cache");
+  });
+
+  it("grant ~ 前缀与 grant 绝对路径幂等（同一资源）", () => {
+    writeSkill("sys-cache-clean", manifestHomePaths, mainOk);
+    registry.register({ name: "sys-cache-clean", version: "0.1.0", kind: "skill", entry: "sys-cache-clean" });
+    registry.grantPermission("sys-cache-clean", { capability: "fs_read", resource: "~/.cache", mode: "read" });
+    const r = registry.grantPermission("sys-cache-clean", {
+      capability: "fs_read", resource: `${home}/.cache`, mode: "read",
+    });
+    expect(r.ok).toBe(true);
+    expect(r.reason).toMatch(/已存在/);
+    expect(registry.getPermissions("sys-cache-clean")).toHaveLength(1);
+  });
+
+  it("revoke 用绝对路径也能撤销 ~ 前缀授予", () => {
+    writeSkill("sys-cache-clean", manifestHomePaths, mainOk);
+    registry.register({ name: "sys-cache-clean", version: "0.1.0", kind: "skill", entry: "sys-cache-clean" });
+    registry.grantPermission("sys-cache-clean", { capability: "fs_read", resource: "~/.cache", mode: "read" });
+    expect(registry.getPermissions("sys-cache-clean")).toHaveLength(1);
+    const r = registry.revokePermission("sys-cache-clean", "fs_read", `${home}/.cache`);
+    expect(r.ok).toBe(true);
+    expect(r.removed).toBe(1);
+    expect(registry.getPermissions("sys-cache-clean")).toHaveLength(0);
+  });
+
+  it("网络资源（wttr.in:80）不被路径归一化影响", () => {
+    const m = {
+      name: "weather-briefing", version: "0.1.0",
+      entry: { command: "./main.sh" },
+      permissions: [{ capability: "network", resource: "wttr.in:80", mode: "connect" }],
+    };
+    writeSkill("weather-briefing", m, mainOk);
+    registry.register({ name: "weather-briefing", version: "0.1.0", kind: "skill", entry: "weather-briefing" });
+    const r = registry.grantPermission("weather-briefing", {
+      capability: "network", resource: "wttr.in:80", mode: "connect",
+    });
+    expect(r.ok).toBe(true);
+    const granted = registry.getPermissions("weather-briefing");
+    expect(granted[0].resource).toBe("wttr.in:80");
+  });
+
+  it("非 home 下的绝对路径不归一化（如 /etc/passwd）", () => {
+    const m = {
+      name: "test-abs", version: "0.1.0",
+      entry: { command: "./main.sh" },
+      permissions: [{ capability: "fs_read", resource: "/etc/passwd", mode: "read" }],
+    };
+    writeSkill("test-abs", m, mainOk);
+    registry.register({ name: "test-abs", version: "0.1.0", kind: "skill", entry: "test-abs" });
+    const r = registry.grantPermission("test-abs", {
+      capability: "fs_read", resource: "/etc/passwd", mode: "read",
+    });
+    expect(r.ok).toBe(true);
+    expect(registry.getPermissions("test-abs")[0].resource).toBe("/etc/passwd");
+  });
+});
