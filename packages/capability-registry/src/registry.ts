@@ -13,7 +13,7 @@ import fs from "node:fs";
 import path from "node:path";
 import Database from "better-sqlite3";
 import { ALL_MIGRATIONS } from "./schema.js";
-import type { CapabilityRecord, RegisterInput, SkillManifest } from "./types.js";
+import type { CapabilityRecord, Permission, RegisterInput, SkillManifest } from "./types.js";
 
 export interface RegistryOptions {
   /** SQLite 数据库文件路径（:memory: 供测试） */
@@ -148,6 +148,69 @@ export class CapabilityRegistry {
     } catch {
       return null;
     }
+  }
+
+  // ---- 权限授予/撤销（PLAN Step 4.4：用户批准的申请单路径，唯一授权入口）----
+
+  /**
+   * 授予权限（用户批准的申请单路径）。
+   * 红线：必须在 skill.json 的 permissions 数组中已声明（防止越权授予未声明权限）。
+   * 幂等：完全相同的 (capability, resource, mode) 已存在则不重复追加。
+   */
+  grantPermission(name: string, permission: Permission): { ok: boolean; reason?: string } {
+    const cap = this.findByName(name);
+    if (!cap) return { ok: false, reason: `能力未注册：${name}` };
+    const manifest = this.loadManifest(name);
+    if (!manifest) return { ok: false, reason: `skill.json 缺失：${name}` };
+    const declared = (manifest.permissions ?? []) as Permission[];
+    const isDeclared = declared.some(
+      (d) => d.capability === permission.capability
+        && d.resource === permission.resource
+        && d.mode === permission.mode,
+    );
+    if (!isDeclared) {
+      return {
+        ok: false,
+        reason: `权限未在 skill.json 中声明：${permission.capability}/${permission.resource}/${permission.mode}。`
+          + `已声明：${declared.length === 0 ? "（无）" : declared.map((d) => `${d.capability}/${d.resource}/${d.mode}`).join(", ")}`,
+      };
+    }
+    const current = cap.permissions as Permission[];
+    const already = current.some(
+      (p) => p.capability === permission.capability
+        && p.resource === permission.resource
+        && p.mode === permission.mode,
+    );
+    if (already) return { ok: true, reason: "权限已存在（幂等）" };
+    const next = [...current, permission];
+    this.db.prepare("UPDATE capabilities SET permissions = ? WHERE name = ? AND version = ?")
+      .run(JSON.stringify(next), cap.name, cap.version);
+    return { ok: true };
+  }
+
+  /** 撤销权限（按 capability + resource 精确匹配，mode 任意）。撤销总是允许（不需声明校验）。 */
+  revokePermission(name: string, capability: string, resource: string): { ok: boolean; removed: number; reason?: string } {
+    const cap = this.findByName(name);
+    if (!cap) return { ok: false, removed: 0, reason: `能力未注册：${name}` };
+    const current = cap.permissions as Permission[];
+    const next = current.filter((p) => !(p.capability === capability && p.resource === resource));
+    const removed = current.length - next.length;
+    if (removed === 0) return { ok: true, removed: 0, reason: "无匹配权限" };
+    this.db.prepare("UPDATE capabilities SET permissions = ? WHERE name = ? AND version = ?")
+      .run(JSON.stringify(next), cap.name, cap.version);
+    return { ok: true, removed };
+  }
+
+  /** 查询能力当前已授予权限（hydrate 后） */
+  getPermissions(name: string): Permission[] {
+    const cap = this.findByName(name);
+    return (cap?.permissions ?? []) as Permission[];
+  }
+
+  /** 查询能力在 skill.json 中已声明的权限需求（供 grant 时校验参考） */
+  getDeclaredPermissions(name: string): Permission[] {
+    const manifest = this.loadManifest(name);
+    return (manifest?.permissions ?? []) as Permission[];
   }
 
   private hydrate(row: CapabilityRecord): CapabilityRecord {

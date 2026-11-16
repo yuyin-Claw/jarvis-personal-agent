@@ -47,7 +47,11 @@ describe("CapabilityRegistry", () => {
   it("注册携带 permissions 被强制忽略（权限只能走申请单）", () => {
     const rec = registry.register({
       name: "greedy", version: "0.1.0", kind: "skill",
-      entry: "greedy", permissions: ["fs:read:/etc/shadow", "net:*"],
+      entry: "greedy",
+      permissions: [
+        { capability: "fs_read", resource: "/etc/shadow", mode: "read" },
+        { capability: "network", resource: "*", mode: "connect" },
+      ],
     });
     expect(rec.permissions).toEqual([]);
   });
@@ -112,5 +116,99 @@ echo '{"ok": false}'
     expect(await registry.healthCheck("ghost")).toBe("unknown");
     await expect(new SkillRunner(tmpRoot).run("ghost", {}))
       .rejects.toThrow(/不存在或清单缺失/);
+  });
+});
+
+describe("CapabilityRegistry 权限授予（PLAN Step 4.4 红线）", () => {
+  const manifestWithDecl = {
+    name: "weather-briefing", version: "0.1.0",
+    entry: { command: "./main.sh" },
+    permissions: [
+      { capability: "network", resource: "wttr.in:80", mode: "connect" },
+      { capability: "fs_read", resource: "~/.cache/jarvis", mode: "read" },
+    ],
+  };
+
+  it("grant 已声明权限成功且落库", () => {
+    writeSkill("weather-briefing", manifestWithDecl, `#!/bin/sh\ncat > /dev/null\necho '{"ok":true}'\n`);
+    registry.register({ name: "weather-briefing", version: "0.1.0", kind: "skill", entry: "weather-briefing" });
+    const r = registry.grantPermission("weather-briefing", {
+      capability: "network", resource: "wttr.in:80", mode: "connect",
+    });
+    expect(r.ok).toBe(true);
+    const granted = registry.getPermissions("weather-briefing");
+    expect(granted).toHaveLength(1);
+    expect(granted[0]).toEqual({ capability: "network", resource: "wttr.in:80", mode: "connect" });
+  });
+
+  it("grant 未声明权限被拒绝（红线：防止越权授予）", () => {
+    writeSkill("weather-briefing", manifestWithDecl, `#!/bin/sh\ncat > /dev/null\necho '{"ok":true}'\n`);
+    registry.register({ name: "weather-briefing", version: "0.1.0", kind: "skill", entry: "weather-briefing" });
+    const r = registry.grantPermission("weather-briefing", {
+      capability: "fs_write", resource: "/etc/passwd", mode: "write",
+    });
+    expect(r.ok).toBe(false);
+    expect(r.reason).toMatch(/未在 skill\.json 中声明/);
+    expect(registry.getPermissions("weather-briefing")).toHaveLength(0);
+  });
+
+  it("grant 部分字段不匹配也被拒（capability 对但 resource 不同）", () => {
+    writeSkill("weather-briefing", manifestWithDecl, `#!/bin/sh\ncat > /dev/null\necho '{"ok":true}'\n`);
+    registry.register({ name: "weather-briefing", version: "0.1.0", kind: "skill", entry: "weather-briefing" });
+    const r = registry.grantPermission("weather-briefing", {
+      capability: "network", resource: "evil.com:443", mode: "connect",
+    });
+    expect(r.ok).toBe(false);
+    expect(registry.getPermissions("weather-briefing")).toHaveLength(0);
+  });
+
+  it("grant 幂等：重复授予同一权限不重复追加", () => {
+    writeSkill("weather-briefing", manifestWithDecl, `#!/bin/sh\ncat > /dev/null\necho '{"ok":true}'\n`);
+    registry.register({ name: "weather-briefing", version: "0.1.0", kind: "skill", entry: "weather-briefing" });
+    const p = { capability: "network", resource: "wttr.in:80", mode: "connect" };
+    registry.grantPermission("weather-briefing", p);
+    const r2 = registry.grantPermission("weather-briefing", p);
+    expect(r2.ok).toBe(true);
+    expect(r2.reason).toMatch(/已存在/);
+    expect(registry.getPermissions("weather-briefing")).toHaveLength(1);
+  });
+
+  it("revoke 撤销匹配 capability+resource 的所有 mode", () => {
+    writeSkill("weather-briefing", manifestWithDecl, `#!/bin/sh\ncat > /dev/null\necho '{"ok":true}'\n`);
+    registry.register({ name: "weather-briefing", version: "0.1.0", kind: "skill", entry: "weather-briefing" });
+    registry.grantPermission("weather-briefing", { capability: "network", resource: "wttr.in:80", mode: "connect" });
+    registry.grantPermission("weather-briefing", { capability: "fs_read", resource: "~/.cache/jarvis", mode: "read" });
+    expect(registry.getPermissions("weather-briefing")).toHaveLength(2);
+    const r = registry.revokePermission("weather-briefing", "network", "wttr.in:80");
+    expect(r.ok).toBe(true);
+    expect(r.removed).toBe(1);
+    const rest = registry.getPermissions("weather-briefing");
+    expect(rest).toHaveLength(1);
+    expect(rest[0].capability).toBe("fs_read");
+  });
+
+  it("revoke 无匹配权限返回 removed=0（不报错）", () => {
+    writeSkill("weather-briefing", manifestWithDecl, `#!/bin/sh\ncat > /dev/null\necho '{"ok":true}'\n`);
+    registry.register({ name: "weather-briefing", version: "0.1.0", kind: "skill", entry: "weather-briefing" });
+    const r = registry.revokePermission("weather-briefing", "network", "nonexistent.com");
+    expect(r.ok).toBe(true);
+    expect(r.removed).toBe(0);
+  });
+
+  it("grant/revoke 未注册能力报错", () => {
+    const r = registry.grantPermission("ghost", { capability: "network", resource: "x", mode: "connect" });
+    expect(r.ok).toBe(false);
+    expect(r.reason).toMatch(/未注册/);
+    const r2 = registry.revokePermission("ghost", "network", "x");
+    expect(r2.ok).toBe(false);
+    expect(r2.reason).toMatch(/未注册/);
+  });
+
+  it("getDeclaredPermissions 返回 skill.json 声明", () => {
+    writeSkill("weather-briefing", manifestWithDecl, `#!/bin/sh\ncat > /dev/null\necho '{"ok":true}'\n`);
+    registry.register({ name: "weather-briefing", version: "0.1.0", kind: "skill", entry: "weather-briefing" });
+    const declared = registry.getDeclaredPermissions("weather-briefing");
+    expect(declared).toHaveLength(2);
+    expect(declared.map((d) => d.capability)).toEqual(["network", "fs_read"]);
   });
 });

@@ -10,6 +10,9 @@
  *   jarvis talk             # 具身对话交互模式
  *   jarvis tasks            # 任务列表
  *   jarvis capabilities [list|run|health|register|enable|disable]  # 能力注册表（0.4）
+ *   jarvis capabilities grant <name> <cap> <res> <mode>   # 授予权限（必须已在 skill.json 声明）
+ *   jarvis capabilities revoke <name> <cap> <res>          # 撤销权限
+ *   jarvis capabilities permissions <name>                 # 权限对照（已声明 vs 已授予）
  *   jarvis factory [list|draft|approve|reject]   # Skill 工厂（0.4：缺口→骨架→审批→注册）
  *   jarvis platform         # 平台适配器五端点状态（macOS / Omarchy）
  *
@@ -114,8 +117,59 @@ async function main(): Promise<void> {
         if (!args[2]) { console.error("用法：capabilities enable|disable <name> <version>"); process.exit(1); }
         const ok = registry.setEnabled(args[2], args[3] ?? "*", sub === "enable");
         console.log(ok ? "已更新" : "未找到该能力");
+      } else if (sub === "grant") {
+        // jarvis capabilities grant <name> <capability> <resource> <mode>
+        // 例：jarvis capabilities grant weather-briefing network wttr.in:80 connect
+        if (args.length < 6) {
+          console.error("用法：capabilities grant <name> <capability> <resource> <mode>");
+          console.error("  例：capabilities grant weather-briefing network wttr.in:80 connect");
+          console.error("  红线：权限必须已在 skill.json 的 permissions 数组中声明");
+          process.exit(1);
+        }
+        const r = registry.grantPermission(args[2]!, {
+          capability: args[3]!, resource: args[4]!, mode: args[5]!,
+        });
+        if (r.ok) {
+          console.log(`✓ 已授予 ${args[2]} 权限：${args[3]}/${args[4]}/${args[5]}${r.reason ? `（${r.reason}）` : ""}`);
+          console.log(`  当前权限：${JSON.stringify(registry.getPermissions(args[2]!), null, 2)}`);
+        } else {
+          console.error(`✗ 授予失败：${r.reason}`);
+          process.exit(1);
+        }
+      } else if (sub === "revoke") {
+        // jarvis capabilities revoke <name> <capability> <resource>
+        // 例：jarvis capabilities revoke weather-briefing network wttr.in:80
+        if (args.length < 5) {
+          console.error("用法：capabilities revoke <name> <capability> <resource>");
+          console.error("  例：capabilities revoke weather-briefing network wttr.in:80");
+          process.exit(1);
+        }
+        const r = registry.revokePermission(args[2]!, args[3]!, args[4]!);
+        if (r.ok) {
+          console.log(`✓ 已撤销 ${r.removed} 项权限${r.reason ? `（${r.reason}）` : ""}`);
+        } else {
+          console.error(`✗ 撤销失败：${r.reason}`);
+          process.exit(1);
+        }
+      } else if (sub === "permissions" && args[2]) {
+        // 显示已声明 vs 已授予权限对照
+        const declared = registry.getDeclaredPermissions(args[2]);
+        const granted = registry.getPermissions(args[2]);
+        console.log(`能力 ${args[2]} 权限对照：\n`);
+        console.log(`已声明（skill.json，${declared.length} 项）：`);
+        for (const p of declared) console.log(`  - ${p.capability}/${p.resource}/${p.mode}`);
+        if (declared.length === 0) console.log("  （无）");
+        console.log(`\n已授予（capabilities.db，${granted.length} 项）：`);
+        for (const p of granted) console.log(`  - ${p.capability}/${p.resource}/${p.mode}`);
+        if (granted.length === 0) console.log("  （无）");
+        const undeclared = granted.filter((g) => !declared.some((d) =>
+          d.capability === g.capability && d.resource === g.resource && d.mode === g.mode));
+        if (undeclared.length > 0) {
+          console.log(`\n⚠️  已授予但未声明的权限（异常状态，建议 revoke）：`);
+          for (const p of undeclared) console.log(`  - ${p.capability}/${p.resource}/${p.mode}`);
+        }
       } else {
-        console.error("用法：jarvis capabilities [list --all | run <name> '<json>' | health <name> | register | enable|disable <name> <version>]");
+        console.error("用法：jarvis capabilities [list --all | run <name> '<json>' | health <name> | register | enable|disable <name> <version> | grant <name> <cap> <res> <mode> | revoke <name> <cap> <res> | permissions <name>]");
         process.exit(1);
       }
     } finally {

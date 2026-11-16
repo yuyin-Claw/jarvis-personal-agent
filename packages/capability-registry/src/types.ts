@@ -2,6 +2,16 @@
 
 export type CapabilityKind = "skill" | "harness" | "mcp" | "tool" | "workflow";
 
+/** 权限声明/授予项（skill.json 与 capabilities.db 共用此结构） */
+export interface Permission {
+  /** 能力类别：network / fs_read / fs_write / exec / delete / ... */
+  capability: string;
+  /** 资源标识：wttr.in:80 / ~/.cache / etc */
+  resource: string;
+  /** 操作模式：connect / read / write / delete / ... */
+  mode: string;
+}
+
 /** capabilities 表行（permissions 为 JSON 数组字符串，读取时 hydrate） */
 export interface CapabilityRecord {
   name: string;
@@ -11,7 +21,7 @@ export interface CapabilityRecord {
   entry: string;
   description: string;
   enabled: 0 | 1;
-  permissions: string[];
+  permissions: Permission[];
   created_at: string;
   health: "healthy" | "degraded" | "unknown";
 }
@@ -23,7 +33,7 @@ export interface RegisterInput {
   entry: string;
   description?: string;
   /** 红线：注册入口忽略此字段（权限只能经用户批准的申请单授予） */
-  permissions?: string[];
+  permissions?: Permission[];
 }
 
 /** skill.json 清单 */
@@ -39,5 +49,5 @@ export interface SkillManifest {
   /** 健康检查 smoke：固定输入 + 期望输出键值 */
   smoke?: { input: unknown; expect?: Record<string, unknown> };
   /** 声明的权限需求（仅文档作用；实际授予走申请单） */
-  permissions?: string[];
+  permissions?: Permission[];
 }
