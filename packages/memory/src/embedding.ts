@@ -58,6 +58,49 @@ export class OpenAIEmbeddingProvider implements EmbeddingProvider {
   }
 }
 
+export interface OllamaEmbeddingOptions {
+  /** guest 内默认 http://127.0.0.1:11434 */
+  baseUrl?: string;
+  model?: string;
+  timeoutMs?: number;
+}
+
+/** Ollama 原生 /api/embed；qwen3-embedding:0.6b 返回完整 1024 维向量。 */
+export class OllamaEmbeddingProvider implements EmbeddingProvider {
+  readonly model: string;
+  private readonly baseUrl: string;
+  private readonly timeoutMs: number;
+
+  constructor(opts: OllamaEmbeddingOptions = {}) {
+    this.baseUrl = (opts.baseUrl ?? "http://127.0.0.1:11434").replace(/\/$/, "");
+    this.model = opts.model ?? "qwen3-embedding:0.6b";
+    this.timeoutMs = opts.timeoutMs ?? 30_000;
+  }
+
+  async embed(texts: string[]): Promise<number[][]> {
+    if (texts.length === 0) return [];
+    const output: number[][] = [];
+    for (let start = 0; start < texts.length; start += 32) {
+      const input = texts.slice(start, start + 32).map((t) => t.slice(0, 12_000));
+      const response = await fetch(`${this.baseUrl}/api/embed`, {
+        method: "POST",
+        headers: { "content-type": "application/json" },
+        body: JSON.stringify({ model: this.model, input }),
+        signal: AbortSignal.timeout(this.timeoutMs),
+      });
+      const body = await response.json() as { embeddings?: number[][]; error?: string };
+      if (!response.ok || !body.embeddings) {
+        throw new Error(`Ollama Embedding 失败（HTTP ${response.status}）：${body.error ?? "未知错误"}`);
+      }
+      if (body.embeddings.length !== input.length || body.embeddings.some((v) => v.length === 0)) {
+        throw new Error("Ollama Embedding 响应数量或格式不匹配");
+      }
+      output.push(...body.embeddings);
+    }
+    return output;
+  }
+}
+
 export function cosineSimilarity(a: number[], b: number[]): number {
   if (a.length === 0 || a.length !== b.length) return 0;
   let dot = 0;

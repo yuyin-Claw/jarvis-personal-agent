@@ -29,11 +29,12 @@ import path from "node:path";
 import os from "node:os";
 import type Database from "better-sqlite3";
 import { LLMGateway, OpenAICompatibleProvider } from "@jarvis/llm-gateway";
-import { SqliteMemoryEngine, OpenAIEmbeddingProvider, MemoryDistiller } from "@jarvis/memory";
+import { SqliteMemoryEngine, OpenAIEmbeddingProvider, OllamaEmbeddingProvider, MemoryDistiller } from "@jarvis/memory";
 import { SqliteTaskManager } from "@jarvis/task-manager";
 import { Orchestrator } from "@jarvis/orchestrator";
 import { CodingHarness, PermissionBroker, type AuditEntry } from "@jarvis/harness-runtime";
 import { CapabilityRegistry, SkillFactory } from "@jarvis/capability-registry";
+import { createOllamaDistiller, withDistillerFallback } from "./memory-local.js";
 import { ContextEngine } from "@jarvis/context-engine";
 import type { AwarenessSource } from "@jarvis/context-engine";
 import { ConversationGateway } from "./gateway.js";
@@ -339,14 +340,20 @@ async function main(): Promise<void> {
 
   // ---- 存储（memory 与 task 共用一个库文件） ----
   mkdirSync(path.dirname(config.dbPath), { recursive: true });
+  const ollamaBaseUrl = process.env.JARVIS_OLLAMA_BASE_URL ?? "http://127.0.0.1:11434";
   const memory = new SqliteMemoryEngine({
     path: config.dbPath,
-    embedding: new OpenAIEmbeddingProvider({
-      baseUrl: config.baseUrl,
-      apiKey: config.apiKey,
-      model: process.env.JARVIS_EMBEDDING_MODEL ?? "embedding-3",
-      dimensions: Number(process.env.JARVIS_EMBEDDING_DIMENSIONS ?? 256),
-    }),
+    embedding: (process.env.JARVIS_MEMORY_EMBEDDING_BACKEND ?? "ollama") === "zhipu"
+      ? new OpenAIEmbeddingProvider({
+          baseUrl: config.baseUrl,
+          apiKey: config.apiKey,
+          model: process.env.JARVIS_EMBEDDING_MODEL ?? "embedding-3",
+          dimensions: Number(process.env.JARVIS_EMBEDDING_DIMENSIONS ?? 256),
+        })
+      : new OllamaEmbeddingProvider({
+          baseUrl: ollamaBaseUrl,
+          model: process.env.JARVIS_OLLAMA_EMBEDDING_MODEL ?? "qwen3-embedding:0.6b",
+        }),
   });
   memory.migrate();
   const taskDb = (memory as unknown as { db: Database.Database }).db;
@@ -498,7 +505,7 @@ async function main(): Promise<void> {
     } else if (sub === "distill") {
       const conversationId = args[2] ?? memory.listConversations()[0]?.id;
       if (!conversationId) { console.error("无可蒸馏会话"); process.exit(1); }
-      const distiller = new MemoryDistiller(memory, async (prompt) => {
+      const glmDistill = async (prompt: string) => {
         const r = await gateway.generate({
           model: config.model,
           messages: [{ role: "user", content: prompt }],
@@ -506,7 +513,17 @@ async function main(): Promise<void> {
           timeoutMs: 120_000,
         });
         return r.content;
+      };
+      const localDistill = createOllamaDistiller({
+        baseUrl: ollamaBaseUrl,
+        model: process.env.JARVIS_OLLAMA_DISTILL_MODEL ?? "qwen3:4b",
       });
+      const summarizer = process.env.JARVIS_MEMORY_DISTILLER === "glm"
+        ? glmDistill
+        : withDistillerFallback(localDistill, glmDistill, (e) => {
+            console.error(`〔本地蒸馏不可用，降级 GLM〕${e.message}`);
+          });
+      const distiller = new MemoryDistiller(memory, summarizer);
       const r = await distiller.distillConversation(conversationId);
       console.log(`蒸馏完成：写入/刷新 ${r.records.length} 条，敏感消息跳过 ${r.skippedSensitive} 条，水位线 ${r.watermark ?? "无"}`);
       for (const record of r.records) console.log(`  ${record.kind.padEnd(22)} ${record.content}`);

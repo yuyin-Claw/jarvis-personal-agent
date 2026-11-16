@@ -1,6 +1,6 @@
 import { beforeEach, describe, expect, it, vi } from "vitest";
 import { MemoryDistiller } from "./distiller.js";
-import { cosineSimilarity, OpenAIEmbeddingProvider, type EmbeddingProvider } from "./embedding.js";
+import { cosineSimilarity, OllamaEmbeddingProvider, OpenAIEmbeddingProvider, type EmbeddingProvider } from "./embedding.js";
 import { SqliteMemoryEngine } from "./sqlite-engine.js";
 
 class MockEmbedding implements EmbeddingProvider {
@@ -57,6 +57,19 @@ describe("语义向量检索", () => {
   it("cosineSimilarity 计算正交与同向向量", () => {
     expect(cosineSimilarity([1, 0], [1, 0])).toBe(1);
     expect(cosineSimilarity([1, 0], [0, 1])).toBe(0);
+  });
+
+  it("Ollama provider 使用原生 /api/embed 并保留完整向量", async () => {
+    const fetchMock = vi.fn(async () => new Response(JSON.stringify({
+      embeddings: [[1, 0, 0], [0, 1, 0]],
+    }), { status: 200 }));
+    vi.stubGlobal("fetch", fetchMock);
+    const provider = new OllamaEmbeddingProvider({ baseUrl: "http://guest.test:11434" });
+    expect(await provider.embed(["甲", "乙"])).toEqual([[1, 0, 0], [0, 1, 0]]);
+    expect(fetchMock.mock.calls[0]![0]).toBe("http://guest.test:11434/api/embed");
+    const init = fetchMock.mock.calls[0]![1] as RequestInit;
+    expect(JSON.parse(String(init.body))).toEqual({ model: "qwen3-embedding:0.6b", input: ["甲", "乙"] });
+    vi.unstubAllGlobals();
   });
 
   it("OpenAI provider 使用官方 embeddings 契约并按 index 恢复顺序", async () => {
