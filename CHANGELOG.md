@@ -3,6 +3,41 @@
 本项目的显著变更记录在此。格式参照 [Keep a Changelog](https://keepachangelog.com/zh-CN/1.1.0/)，
 版本号遵循 [SemVer](https://semver.org/lang/zh-CN/)。
 
+## [0.5.0] - 2026-11-17 — 中文语音升级 · Dynamic UI · 设置中心闭环
+
+本版把「能听、能唤醒、能弹窗」推进为可操作系统设置的完整体验，并修复真实链路中发现的阻塞问题。
+
+### 中文语音与唤醒
+
+- 接入阿里 **SenseVoice int8**（sherpa-onnx）：中文简体输出、ITN 标点，纯推理显著快于 whisper.cpp base；不可用时保留 whisper.cpp 降级。
+- 新增 **Silero VAD + KWS zipformer wenetspeech** live 链路：语音段检测后，只有命中唤醒词才进入 ASR，背景音不再直接触发转写。
+- `live.mjs` 管理 Python 子进程完整生命周期，模型缺失时保留原能量法 VAD。
+- KWS 正/负向实测通过：「你好贾维斯」可唤醒，非唤醒语音段正确丢弃；TTS 正向测试 ASR 低至约 50ms。
+
+### Dynamic UI 与设置中心
+
+- 新增 **Dynamic UI Host**：HTTP API + HTML 渲染 + webkit2gtk 窗口，支持 settings / task_list / confirm / progress / custom。
+- Orchestrator 新增 `invoke_ui` 决策分支，bridge server 按路径将 `/ui/*` 转发至 UI Host。
+- 设置中心从静态展示升级为真实功能：
+  - core / voice / avatar / bridge-agent / UI Host 真实状态；
+  - Agent 激活、停用、重启，基础设施保持在线；
+  - 2-8 个汉字自定义唤醒词，pypinyin 生成音素，模型校验、voice 热重启、失败回滚与审计；
+  - voiceEnabled / notifyEnabled 即时生效，无需重启。
+
+### 可靠性与安全修复
+
+- 根治 `invoke_ui` 卡死：常驻 bridge-agent 补齐 `/req` 轮询；全链 token 校验；agent 5 秒无心跳快速 503；代理、CLI、guest fetch 全部有界超时；server 重启后 agent 自动恢复。
+- `daemonize` 先 fork 再创建 server，避免端口争用；server/daemon 不再占用单客户端 QMP。
+- Factory develop 成功后清理超时定时器，修复代码已生成但 CLI 仍空等 5 分钟的问题。
+- guest 永久部署方案：代码落到本地磁盘，jarvis unit 脱离 9p 工作目录依赖；9p 仅作部署/诊断通道。
+- chrome-clean 真实实现：仅清浏览器缓存，防御性保护 Cookies / Login Data / History 等用户数据，dry-run + confirm 双开关与逐项权限。
+
+### 验证
+
+- **296 个单测 + typecheck 全绿**，另有 bridge 与 Python 设置事务回归。
+- 真实 GLM develop → approve → register → run 全链路通过。
+- guest SenseVoice / live 启停 / KWS 正反向 / UI 渲染 / stop→start 全部通过；测试后恢复原设置与服务。
+
 ## [0.4.0] - 2026-11-16 — 能力闭环真正完整 · 权限红线运行时落地 · 高危能力示范
 
 本版把 ADR-011「能力闭环 MVP」从「骨架生成器」推进为「真正完整的能力自生长体系」：
