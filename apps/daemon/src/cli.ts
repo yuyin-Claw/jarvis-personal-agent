@@ -653,9 +653,11 @@ async function main(): Promise<void> {
       // 通过 bridge server 透传到 guest 内的 UI Host（/ui/* → 8788）
       try {
         const bridgePort = process.env.JARVIS_BRIDGE_PORT ?? "9222";
+        const timeoutMs = Number(process.env.JARVIS_UI_TIMEOUT_MS ?? 12_000);
         const res = await fetch(`http://localhost:${bridgePort}/ui/render`, {
           method: "POST",
           headers: { "content-type": "application/json" },
+          signal: AbortSignal.timeout(timeoutMs),
           body: JSON.stringify({
             type: d.ui.type,
             title: d.ui.title,
@@ -675,7 +677,9 @@ async function main(): Promise<void> {
           memory.appendMessage(conversationId, "assistant", d.text);
         }
       } catch (e) {
-        console.log(`〔UI Host 不可用：${(e as Error).message}〕`);
+        const err = e as Error & { cause?: { message?: string } };
+        const reason = err.cause?.message ? `${err.message}（${err.cause.message}）` : err.message;
+        console.log(`〔UI Host 不可用：${reason}〕`);
         console.log(d.text);
         memory.appendMessage(conversationId, "assistant", d.text);
       }

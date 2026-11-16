@@ -58,8 +58,9 @@ mkdir -p ~/.local/share/jarvis
 cp -r /mnt/mac/jarvis-voice-service ~/.local/share/jarvis/
 cp /mnt/mac/jarvis-avatar-host.py ~/.local/share/jarvis/
 cp /mnt/mac/avatar.html ~/.local/share/jarvis/
+cp /mnt/mac/proxy-request.mjs ~/.local/share/jarvis/
 cp /mnt/mac/jarvis-core.env ~/.local/share/jarvis/ 2>/dev/null || touch ~/.local/share/jarvis/jarvis-core.env
-echo "✓ jarvis-voice-service / jarvis-avatar-host.py / avatar.html / jarvis-core.env 已复制"
+echo "✓ jarvis-voice-service / avatar / proxy-request / jarvis-core.env 已复制"
 echo
 
 # ---- 6. 改 jarvis unit 指向本地路径 ----

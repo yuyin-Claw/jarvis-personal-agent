@@ -161,12 +161,27 @@ export async function createGuestBridge(opts = {}) {
   // /cmd 与 /out 仅对合法 token 出队/接收。旧代理（无 token 的 curl 残留）
   // 永远拿到 204 空响应，自然淘汰——根治「旧代理抢命令」。
   let agentToken = null; // 当前合法 agent 的令牌（单 agent 原则）
+  let lastAgentSeenAt = 0;
+  let ready = false;
+  const agentTtlMs = Number(opts.agentTtlMs ?? process.env.JARVIS_BRIDGE_AGENT_TTL_MS ?? 5_000);
+  const proxyTimeoutMs = Number(opts.proxyTimeoutMs ?? process.env.JARVIS_BRIDGE_PROXY_TIMEOUT_MS ?? 10_000);
   const crypto = await import("node:crypto");
 
   const proxyQueue = [];
   let proxySeq = 0;
   const proxyTarget = opts.proxyTarget ?? "http://127.0.0.1:8787";
-  const proxyScript = opts.proxyScript ?? "/home/yuyin/Omarchy/jarvis-voice-service/proxy-request.mjs";
+  // 永久方案后 guest 代码在本地磁盘；不能再依赖 9p 的 ~/Omarchy 路径
+  const proxyScript = opts.proxyScript ?? process.env.JARVIS_PROXY_SCRIPT
+    ?? "/home/yuyin/.local/share/jarvis/proxy-request.mjs";
+  const validAgent = (req) => {
+    const url = new URL(req.url, "http://x");
+    return !!agentToken && url.searchParams.get("token") === agentToken;
+  };
+  const markAgentSeen = () => {
+    lastAgentSeenAt = Date.now();
+    ready = true;
+  };
+  const agentOnline = () => !!agentToken && Date.now() - lastAgentSeenAt <= agentTtlMs;
 
   const server = http.createServer((req, res) => {
     hits.push(`${req.method} ${req.url}`);
@@ -186,13 +201,10 @@ export async function createGuestBridge(opts = {}) {
     }
     if (req.url?.startsWith("/cmd")) {
       // 令牌门：未注册的请求（旧代理/探测）返回 204 空——不出队、不消耗命令
-      const url = new URL(req.url, "http://x");
-      const tok = url.searchParams.get("token");
-      // 未注册（server 刚起 token 表为空）或 token 不匹配：一律 204 空。
-      // agent 收到空会触发重注册；旧代理（无 token）永远拿不到命令。
-      if (!agentToken || tok !== agentToken) {
+      if (!validAgent(req)) {
         res.writeHead(204); res.end(); return;
       }
+      markAgentSeen();
       // 旧格式迁移命令优先（供磁盘持久化的旧协议代理执行）
       if (legacyQueue.length) {
         res.writeHead(200, { "content-type": "text/plain" });
@@ -206,30 +218,40 @@ export async function createGuestBridge(opts = {}) {
         : "");
       return;
     }
-    if (req.url === "/req") {
+    if (req.url?.startsWith("/req")) {
+      // 与 /cmd 同样校验令牌：旧 bootstrap agent 不得抢走 invoke_ui 等代理任务
+      if (!validAgent(req)) {
+        res.writeHead(204); res.end(); return;
+      }
+      markAgentSeen();
       const id = proxyQueue.shift();
       const job = id ? proxyJobs.get(id) : undefined;
       res.writeHead(200, { "content-type": "text/plain" });
       res.end(job
-        ? `node ${proxyScript} http://${GATEWAY_IP}:${port} ${id} ${job.method} '${job.path}' ${job.target ?? proxyTarget}`
+        ? `node ${proxyScript} http://${GATEWAY_IP}:${port} ${id} ${job.method} '${job.path}' ${job.target ?? proxyTarget} ${agentToken}`
         : "");
       return;
     }
     if (req.url?.startsWith("/body/")) {
-      const job = proxyJobs.get(req.url.slice(6));
+      if (!validAgent(req)) { res.writeHead(204); res.end(); return; }
+      const url = new URL(req.url, "http://x");
+      const job = proxyJobs.get(url.pathname.slice(6));
       res.writeHead(job ? 200 : 404);
       res.end(job ? job.body : "");
       return;
     }
     if (req.url?.startsWith("/res/") && req.method === "POST") {
+      if (!validAgent(req)) { res.writeHead(204); res.end(); return; }
+      const url = new URL(req.url, "http://x");
+      const id = url.pathname.slice(5);
       let raw = "";
       req.on("data", (c) => { raw += c; });
       req.on("end", () => {
         res.writeHead(200); res.end("ok");
-        const job = proxyJobs.get(req.url.slice(5));
+        const job = proxyJobs.get(id);
         if (!job) return;
         clearTimeout(job.timer);
-        proxyJobs.delete(req.url.slice(5));
+        proxyJobs.delete(id);
         try { job.resolve(JSON.parse(raw)); }
         catch { job.resolve({ status: 502, body: JSON.stringify({ ok: false, error: "proxy 结果解析失败" }) }); }
       });
@@ -237,10 +259,10 @@ export async function createGuestBridge(opts = {}) {
     }
     if (req.url?.startsWith("/out") && req.method === "POST") {
       // 令牌门（/out?token=xxx）：未注册的回传直接丢弃
-      const url = new URL(req.url, "http://x");
-      if (!agentToken || url.searchParams.get("token") !== agentToken) {
+      if (!validAgent(req)) {
         res.writeHead(204); res.end(); return;
       }
+      markAgentSeen();
       let body = "";
       req.on("data", (c) => { body += c; });
       req.on("end", () => {
@@ -270,6 +292,16 @@ export async function createGuestBridge(opts = {}) {
     }
     // 其余路径一律透传给 guest 内的 HTTP 服务（按路径前缀分发到不同端口）
     // /ui/* → UI Host（8788）；其余 → voice-service（8787）
+    // agent 离线时立即失败：不能进入无人消费的队列后空等 90 秒
+    if (!agentOnline()) {
+      res.writeHead(503, { "content-type": "application/json; charset=utf-8", "retry-after": "1" });
+      res.end(JSON.stringify({
+        ok: false,
+        error: `guest agent 离线（>${agentTtlMs}ms 未心跳）`,
+        hint: "agent 会自动重连；请稍后重试，勿反复重启 bridge server",
+      }));
+      return;
+    }
     const targetPort = req.url?.startsWith("/ui") ? 8788 : 8787;
     const targetBase = `http://127.0.0.1:${targetPort}`;
     const id = String(++proxySeq);
@@ -278,9 +310,12 @@ export async function createGuestBridge(opts = {}) {
     req.on("end", () => {
       const timer = setTimeout(() => {
         proxyJobs.delete(id);
+        const queuedAt = proxyQueue.indexOf(id);
+        if (queuedAt >= 0) proxyQueue.splice(queuedAt, 1); // 防止恢复后执行过期 UI 请求
+        if (res.writableEnded) return;
         res.writeHead(504, { "content-type": "application/json" });
-        res.end(JSON.stringify({ ok: false, error: "guest 代理超时" }));
-      }, 90_000);
+        res.end(JSON.stringify({ ok: false, error: `guest 代理超时（${proxyTimeoutMs}ms）` }));
+      }, proxyTimeoutMs);
       const done = new Promise((resolve) => {
         proxyJobs.set(id, { method: req.method, path: req.url, body: Buffer.concat(chunks), resolve, timer, target: targetBase });
       });
@@ -294,12 +329,32 @@ export async function createGuestBridge(opts = {}) {
     return;
   });
   const fixedPort = Number(process.env.JARVIS_BRIDGE_PORT ?? 0);
-await new Promise((resolve) => server.listen(fixedPort, "0.0.0.0", resolve));
+  await new Promise((resolve) => server.listen(fixedPort, "0.0.0.0", resolve));
   const port = server.address().port;
   log(`[bridge] HTTP :${port}  QMP ${qmpPath}`);
 
-  const qmp = new Qmp(qmpPath);
-  await qmp.ready();
+  let qmp;
+  if (opts.qmpDisabled) {
+    // server/daemon 只提供 /cmd + /req 代理，绝不占用单客户端 QMP；
+    // 这样诊断、注入和端口转发仍可并行使用 QMP。
+    qmp = {
+      close() {},
+      async call() { return { error: { desc: "QMP 已禁用（纯 HTTP 代理模式）" } }; },
+    };
+  } else {
+    try {
+      qmp = new Qmp(qmpPath);
+      await qmp.ready();
+    } catch (e) {
+      if (!opts.qmpOptional) throw e;
+      log(`[bridge] QMP 不可用，降级为纯 HTTP 代理：${e.message}`);
+      qmp?.close();
+      qmp = {
+        close() {},
+        async call() { return { error: { desc: "QMP 不可用（纯 HTTP 代理模式）" } }; },
+      };
+    }
+  }
 
   // 分批注入按键：QEMU 输入队列一次性塞入过多事件会丢帧
   async function inject(text) {
@@ -326,7 +381,6 @@ await new Promise((resolve) => server.listen(fixedPort, "0.0.0.0", resolve));
   // 等待 guest 首次取到 /b 并完成一次探测命令，证明整条链路通
   const readyId = `ready-${++seq}`;
   queue.push({ id: readyId, cmd: "printf bridge-ready" });
-  let ready = false;
   const noInject = !!process.env.JARVIS_BRIDGE_NO_INJECT;
   // 迁移模式：guest 里可能驻留着旧协议代理（拉到新格式 payload 会把两行
   // base64 当命令执行并回传无 id 结果）。先用旧格式下发一条迁移命令：
@@ -356,22 +410,21 @@ await new Promise((resolve) => server.listen(fixedPort, "0.0.0.0", resolve));
       queue.push({ id: readyId, cmd: "printf bridge-ready" });
     });
   }
-  for (let attempt = 1; attempt <= 3 && !ready; attempt++) {
-    if (noInject || waitMode) break; // WAIT 模式不注入
-    if (attempt > 1) log(`[bridge] 第 ${attempt} 次重试注入`);
-    await launch();
-    ready = await new Promise((resolve) => {
-      const timer = setTimeout(() => { waiters.delete(readyId); resolve(false); }, 14_000);
-      waiters.set(readyId, (r) => { clearTimeout(timer); resolve(r.out.includes("bridge-ready")); });
-    });
-    if (!ready) log(`[bridge] 诊断 hits=${JSON.stringify(hits.slice(-12))}`);
-  }
+  // 不再因 agent 未连入而退出——server 启动后持续监听，agent 会自动连入
+  // 原逻辑：if (!ready) { qmp.close(); server.close(); throw Error(...) }
+  // 新逻辑：无论 agent 是否连入，server 都持续运行（agent 会自动重连）
   if (!ready) {
-    qmp.close();
-    await new Promise((resolve) => server.close(resolve));
-    throw new Error(`guest 代理未启动；请求记录：${JSON.stringify(hits.slice(-20))}`);
+    log("[bridge] agent 暂未连入——server 持续监听，等待 agent 自动重连");
   }
   log("[bridge] guest 代理已就绪");
+
+  // 超时检测：30 秒内 agent 没连入 → mac 通知
+  setTimeout(async () => {
+    if (!ready) {
+      const { exec } = await import("node:child_process");
+      exec(`osascript -e 'display notification "bridge server 已启动 30 秒，但 agent 未连入" with title "JARVIS Bridge" subtitle "请检查 guest 内的 jarvis-bridge-agent" sound name "Basso"'`);
+    }
+  }, 30_000);
 
   async function exec(cmd, timeoutMs = 30_000) {
     const id = `cmd-${++seq}`;
@@ -435,13 +488,38 @@ await new Promise((resolve) => server.listen(fixedPort, "0.0.0.0", resolve));
 /** CLI */
 if (process.argv[1] && import.meta.url === pathToFileURL(process.argv[1]).href) {
   const mode = process.argv[2] ?? "probe";
-  const bridge = await createGuestBridge();
+  // daemonize 必须先 fork、由子进程创建 server；否则父子进程争用同一端口，
+  // 父进程退出后 9222 随即关闭，后续 invoke_ui 全部失败。
+  if (mode === "daemonize") {
+    const { spawn } = await import("node:child_process");
+    const child = spawn(process.argv[0], [process.argv[1], "daemon"], {
+      detached: true,
+      stdio: "ignore",
+      env: process.env,
+    });
+    child.unref();
+    console.log(`[bridge] daemonize：子进程 PID ${child.pid} 已脱离终端`);
+    process.exit(0);
+  }
+  const bridge = await createGuestBridge({ qmpDisabled: mode === "server" || mode === "daemon" });
   try {
     if (mode === "exec") {
       const r = await bridge.exec(process.argv.slice(3).join(" "), 60_000);
       process.stdout.write(r.out);
       process.stderr.write(`\n[rc=${r.rc}]\n`);
       process.exitCode = r.rc === 0 ? 0 : 1;
+    } else if (mode === "server") {
+      // server 模式：持续运行（不退出）
+      console.log("[bridge] server 模式：持续监听，Ctrl+C 退出");
+      // 保持进程运行（不调用 bridge.stop()）
+      await new Promise(() => {});
+    } else if (mode === "daemon") {
+      // daemon 模式：脱离终端后台运行
+      console.log("[bridge] daemon 模式：后台运行");
+      // 忽略 SIGHUP（终端关闭不退出）
+      process.on("SIGHUP", () => {});
+      // 保持进程运行
+      await new Promise(() => {});
     } else {
       // 逐条短命令：单条命令过长时 curl 回传容易超时
       for (const c of [
@@ -456,6 +534,6 @@ if (process.argv[1] && import.meta.url === pathToFileURL(process.argv[1]).href) 
       }
     }
   } finally {
-    await bridge.stop();
+    if (mode !== "server" && mode !== "daemon") await bridge.stop();
   }
 }

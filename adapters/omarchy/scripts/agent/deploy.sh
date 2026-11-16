@@ -9,7 +9,8 @@ pkill -f 'curl.*10.0.2.2' 2>/dev/null || true
 systemctl --user stop jarvis-bridge-agent 2>/dev/null || true
 
 cp /mnt/mac/jarvis-bridge-agent.sh /home/yuyin/.local/share/jarvis/bridge-agent.sh
-chmod +x /home/yuyin/.local/share/jarvis/bridge-agent.sh
+cp /mnt/mac/proxy-request.mjs /home/yuyin/.local/share/jarvis/proxy-request.mjs
+chmod +x /home/yuyin/.local/share/jarvis/bridge-agent.sh /home/yuyin/.local/share/jarvis/proxy-request.mjs
 
 cat > /home/yuyin/.config/systemd/user/jarvis-bridge-agent.service <<'UNIT'
 [Unit]
