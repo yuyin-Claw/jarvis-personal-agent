@@ -79,21 +79,36 @@ export class OmarchyBackend extends BaseBackend {
     this.ffmpeg = which("ffmpeg");
     this.upstream = env.JARVIS_VOICE_UPSTREAM ?? "";
     this.model = env.JARVIS_ASR_MODEL ?? "base";
+    // SenseVoice（阿里多语言 ASR，int8 量化）：模型 + Python 脚本路径
+    // 优先级高于 whisper.cpp（中文识别更准 + 简体输出 + 速度更快）
+    this.senseVoiceModel = env.JARVIS_SENSE_VOICE_MODEL
+      ?? path.join(os.homedir(), ".local/share/sense-voice/model.int8.onnx");
+    this.senseVoiceTokens = env.JARVIS_SENSE_VOICE_TOKENS
+      ?? path.join(os.homedir(), ".local/share/sense-voice/tokens.txt");
+    this.senseVoiceScript = env.JARVIS_SENSE_VOICE_SCRIPT
+      ?? path.join(os.homedir(), "Omarchy/jarvis-voice-service/src/sensevoice-transcribe.py");
+    this.senseVoiceEnabled = env.JARVIS_SENSE_VOICE !== "0"
+      && fs.existsSync(this.senseVoiceModel)
+      && fs.existsSync(this.senseVoiceTokens)
+      && fs.existsSync(this.senseVoiceScript);
   }
   describe() {
-    const asrLocal = !!(this.whisperCli || this.vosk || this.superwhisper);
+    const asrLocal = !!(this.senseVoiceEnabled || this.whisperCli || this.vosk || this.superwhisper);
     const ttsLocal = !!(this.piper || this.espeak);
-    const asrEngine = this.whisperCli ? "whisper.cpp"
+    // SenseVoice 优先（中文识别更准 + 简体输出 + 速度更快）
+    const asrEngine = this.senseVoiceEnabled ? "sensevoice"
+      : this.whisperCli ? "whisper.cpp"
       : this.vosk ? "vosk"
         : this.superwhisper ? "superwhisper"
           : (this.upstream ? "upstream" : "none");
     return {
       platform: "omarchy",
       asr: {
-        engine: asrEngine, model: this.model,
+        engine: asrEngine, model: this.senseVoiceEnabled ? "sensevoice-int8" : this.model,
         ready: asrLocal || !!this.upstream, local: asrLocal,
         // 8GB VM 下 Superwhisper 离线模型不可用，会走其云端后端；如实标注
-        modelLocation: this.superwhisper && !this.whisperCli && !this.vosk ? "guest-process" : "guest-local",
+        modelLocation: this.senseVoiceEnabled ? "guest-local"
+          : this.superwhisper && !this.whisperCli && !this.vosk ? "guest-process" : "guest-local",
       },
       tts: {
         engine: ttsLocal ? (this.piper ? "piper" : "espeak-ng") : (this.upstream ? "upstream" : "none"),
@@ -141,6 +156,28 @@ export class OmarchyBackend extends BaseBackend {
       const r = await this.upstreamCall("asr", { audio: Buffer.from(audio).toString("base64"), format, language });
       return { ...r, engine: `upstream:${r.engine}` };
     };
+
+    // SenseVoice 优先（中文识别更准 + 简体输出 + 速度更快）
+    if (this.senseVoiceEnabled) {
+      const { dir, wav } = await toWav(audio, format);
+      try {
+        const { stdout } = await run("python3", [this.senseVoiceScript, wav], {
+          timeout: 60_000, maxBuffer: 1024 * 1024,
+          env: {
+            ...process.env,
+            JARVIS_SENSE_VOICE_MODEL: this.senseVoiceModel,
+            JARVIS_SENSE_VOICE_TOKENS: this.senseVoiceTokens,
+          },
+        });
+        const r = JSON.parse(stdout.trim());
+        if (!r.ok) throw err(r.error ?? "SenseVoice 未产出文本");
+        return { text: r.text, engine: "sensevoice", model: "int8", latencyMs: Date.now() - started };
+      } catch (e) {
+        console.error(`[asr] SenseVoice 失败，降级 whisper.cpp：${e.message}`);
+        // 降级走 whisper.cpp 流程
+      } finally { cleanup(dir); }
+    }
+
     if (this.superwhisper && !this.whisperCli && !this.vosk) {
       try {
         const text = await this.superwhisperTranscribe(audio, format);
