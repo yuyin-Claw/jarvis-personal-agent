@@ -108,6 +108,10 @@ systemctl --user daemon-reload
 systemctl --user enable --now jarvis-ui-host
 ```
 
+## Super+J 全局快捷键
+
+`apps/voice-service/deploy/jarvis.lua` 注册 `SUPER + J`：已有设置窗口则聚焦，否则运行 `open-settings.py` 经 UI Host 新建。部署后执行 `hyprctl reload`，并确认 `hyprctl configerrors` 无输出。
+
 ## 测试
 
 ```sh

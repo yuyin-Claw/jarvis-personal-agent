@@ -19,3 +19,15 @@ o.window("jarvis-avatar-host.py", {
 
 -- 透明悬浮球：显式开透明（默认 GTK 透明视觉 + WebKit 透明背景）
 o.transparent_window("jarvis-avatar-host.py", "1.0 1.0")
+
+-- Dynamic UI Host 弹窗（设置/任务/确认）：浮动、右下角、可聚焦。
+o.window("window.py", {
+  float = true,
+  size = "480 640",
+  move = { "(monitor_w-window_w-40)", "(monitor_h-window_h-40)" },
+  pin = true,
+  no_blur = true,
+})
+
+-- Super+J：已有设置窗口则聚焦，否则经 UI Host 新建。
+o.bind("SUPER + J", "Open JARVIS settings", "python3 $HOME/.local/share/jarvis/ui-host/open-settings.py")
