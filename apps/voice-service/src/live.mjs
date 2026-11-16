@@ -58,6 +58,7 @@ export class LiveListener {
       dir, raw, target,
       startedAt: Date.now(),
       proc: null,
+      pythonProc: null,  // live-sensevoice.py 子进程
       ring: null,        // 当前累积 fd（追加写）
       utterances: [],    // {start,end,bytes}
       state: "listening", // listening | speaking | transcribing
@@ -80,8 +81,42 @@ export class LiveListener {
         this.session.proc = null;
       }
     });
-    // 采集轮询：文件增长 → VAD
-    this.session.timer = setInterval(() => this.tick(), 60);
+
+    // 起 Python 子进程（live-sensevoice.py）读 ring 文件
+    // 如果模型存在则启用（Silero VAD + KWS + SenseVoice），否则降级能量法 VAD
+    const pythonScript = path.join(os.homedir(), ".local/share/jarvis/jarvis-voice-service/src/live-sensevoice.py");
+    const senseVoiceModel = path.join(os.homedir(), ".local/share/jarvis/sense-voice/model.int8.onnx");
+    if (fs.existsSync(pythonScript) && fs.existsSync(senseVoiceModel)) {
+      const pythonProc = spawn("python3", [pythonScript, raw], {
+        stdio: ["ignore", "pipe", "pipe"],
+      });
+      this.session.pythonProc = pythonProc;
+      let buffer = "";
+      pythonProc.stdout.on("data", (chunk) => {
+        buffer += chunk.toString();
+        const lines = buffer.split("\n");
+        buffer = lines.pop() ?? "";
+        for (const line of lines) {
+          if (!line.trim()) continue;
+          try {
+            const event = JSON.parse(line);
+            this.emit(event.type, event);
+          } catch { /* 非 JSON 行忽略 */ }
+        }
+      });
+      pythonProc.stderr?.on("data", (c) => {
+        if (process.env.JARVIS_LIVE_DEBUG) console.error("[live] python:", String(c).trim());
+      });
+      pythonProc.on("exit", (code) => {
+        if (this.session && this.session.pythonProc === pythonProc) {
+          this.emit("listening_stop", { reason: "python exited", code });
+          this.session.pythonProc = null;
+        }
+      });
+    } else {
+      // 降级：能量法 VAD（现有 tick 逻辑）
+      this.session.timer = setInterval(() => this.tick(), 60);
+    }
     return this.describe();
   }
 
@@ -215,6 +250,7 @@ export class LiveListener {
     if (s.timer) clearInterval(s.timer);
     if (s.pending) await this.closeUtterance();
     if (s.proc) { try { s.proc.kill("SIGTERM"); } catch { /* 已退出 */ } }
+    if (s.pythonProc) { try { s.pythonProc.kill("SIGTERM"); } catch { /* 已退出 */ } }
     try { fs.rmSync(s.dir, { recursive: true, force: true }); } catch { /* best effort */ }
     this.session = null;
     this.emit("listening_stop", { reason: "stopped" });
