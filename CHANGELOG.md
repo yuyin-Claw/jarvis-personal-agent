@@ -3,6 +3,139 @@
 本项目的显著变更记录在此。格式参照 [Keep a Changelog](https://keepachangelog.com/zh-CN/1.1.0/)，
 版本号遵循 [SemVer](https://semver.org/lang/zh-CN/)。
 
+## [0.4.0] - 2026-11-16 — 能力闭环真正完整 · 权限红线运行时落地 · 高危能力示范
+
+本版把 ADR-011「能力闭环 MVP」从「骨架生成器」推进为「真正完整的能力自生长体系」：
+
+- **Factory develop 落地**：调度 LLM 把骨架改写为真实实现（GLM 实测生成合法 main.sh）
+- **PLAN Step 4.3 三步**：security review / sandbox test / approveWithReview——危险命令静态扫描 + 契约测试 + 完整批准流水线
+- **权限红线运行时落地**：`registry.run()` 安全入口——未授予权限的能力拒绝执行
+- **用户批准入口**：`capabilities grant/revoke/permissions` 子命令（之前只能手工 SQL 落库）
+- **首个高危能力示范**：sys-cache-clean 真实实现（dry-run 默认 + confirm 双开关 + 白名单 + 逐项权限）
+- **weather cron**：每日 08:00 自动调 weather-briefing 并播报
+- **资产风险修复**：guest 真实能力代码备份入库（`skills/`）
+
+### 新增（Factory develop · PLAN Step 4.3）
+
+- `SkillFactory.develop(name, opts)`：调度 LLM 把 staging 骨架 main.sh（implemented=false）改写为真实实现
+- `LLMGenerateFn` 依赖注入类型（保持 capability-registry 包与 llm-gateway 解耦）
+- 骨架备份 `main.sh.skeleton`（幂等，二次 develop 不覆盖）
+- 诊断日志 `DEVELOP_LOG.md`（含 system prompt + user prompt + LLM 原始响应 + 提取代码）
+- **红线**：不修改 `PERMISSION_REQUEST.md` / `skill.json.permissions`（申请单只能用户改）
+- LLM 声明需要更多权限时不生成代码，返回 `requestedPermissions` 供用户追加
+- prompt 含红线约束（权限范围 / 危险命令 / shebang / 契约）+ Promise.race 超时（默认 5 分钟）
+- CLI：`jarvis factory develop <name>`（需 LLM key；其他 factory 子命令不需要）
+
+**实测（GLM 真实调用）**：构造 hello-world 骨架 → factory develop → GLM 真实生成 main.sh（含 shebang + 注释 + 排空 stdin + 完全符合契约）→ factory approve 完整流水线 → capabilities run 真实返回 hello world。
+
+### 新增（PLAN Step 4.3 三步：security review / sandbox test / approveWithReview）
+
+- `SkillFactory.securityReview(name)`：同步静态审查
+  - entry.command 路径边界（禁止 PATH 逃逸 `..`、绝对路径）
+  - 权限声明 resource 合理性（禁止 `*` / `/` 根目录）
+  - main.sh 危险命令静态扫描（去注释后匹配）：rm -rf / · dd if= · mkfs · fork 炸弹 · chmod 777 / · curl|sh · wget|sh · 直接写磁盘 /dev/sd* · eval $(...) · nc 监听后门
+- `SkillFactory.sandboxTest(name)`：在 stagingRoot 内跑 skill.json 声明的 smoke 契约（不依赖 registry.register，staging 骨架未注册也可测）
+- `SkillFactory.approveWithReview(name)`：完整流水线 security → sandbox → register；任一步失败拒绝注册，骨架保留在 staging 供修复
+- CLI 改动：`factory approve` 改用 approveWithReview（红线默认开启）；新增 `factory review <name>` / `factory test <name>` 独立调试入口；支持 `JARVIS_STAGING_ROOT` 环境变量
+
+**实测**：危险骨架（curl|sh）→ review 识别 + approve 拒绝 + staging 保留 + 未注册；合法骨架 → review/test/approve 全通过 + 已注册 + staging 清空。
+
+### 新增（权限授予路径 · PLAN Step 4.4）
+
+- `CapabilityRegistry.grantPermission(name, permission)`：红线校验必须已在 skill.json 的 permissions 数组中声明（防越权授予）；幂等去重
+- `CapabilityRegistry.revokePermission(name, capability, resource)`：撤销匹配项（capability + resource 精确匹配，mode 任意）
+- `CapabilityRegistry.getPermissions / getDeclaredPermissions`：查询权限对照
+- **types.ts 修正**：`Permission` 接口 `{capability, resource, mode}` 对象（原 `string[]` 与实际数据不符）
+- CLI 三个子命令：
+  - `jarvis capabilities grant <name> <cap> <res> <mode>`：授予权限（必须已声明）
+  - `jarvis capabilities revoke <name> <cap> <res>`：撤销权限
+  - `jarvis capabilities permissions <name>`：权限对照（含未声明已授予的异常检测）
+
+**实测**：register → grant 已声明 ✅ / grant 未声明被拒 ✅ / 重复 grant 幂等 ✅ / revoke ✅ / 权限对照显示 ✅。
+
+### 新增（registry.run 安全入口 · ADR-011 红线运行时落地）
+
+之前 SkillRunner 沙箱只有 cwd 限定，无权限校验。本次加 `CapabilityRegistry.run()` 安全入口：先校验 manifest.permissions 声明 vs capabilities.db 已授予，未全部授予则 throw 拒绝执行（错误信息含缺失权限清单 + grant 命令提示）。
+
+- 零权限能力（manifest.permissions=[]）→ 直接放行
+- 声明权限未全部授予 → throw「权限未授予，拒绝执行 <name>：缺失 ...」
+- 声明权限全部已授予 → 放行到底层 SkillRunner
+
+**调用方迁移**：
+- cli.ts `capabilities run` 子命令 → registry.run
+- cli.ts invoke_capability 分发 → capRegistry.run
+- daemon.ts weather cron → capRegistry.run
+
+**实测**：未 grant 时 run 被拒（错误信息含缺失权限与命令提示）→ grant 后 run 真实返回上海天气（wttr.in 实时数据）。
+
+### 新增（sys-cache-clean 真实能力 · 首个高危能力示范）
+
+实现 staging 中的 sys-cache-clean 骨架为真实能力（高危删除类，PLAN Step 4.4 逐项权限申请单）。
+
+**main.sh 真实实现**（python3 内嵌，POSIX sh 兼容）：
+- 白名单目录：~/.cache / npm / pnpm / macOS Caches / /tmp/jarvis-*
+- **默认 dryRun=true**（只扫描报告，不删除）
+- **真删双开关**：dryRun=false + confirm=true（高危红线）
+- 大小阈值：默认 1MB，小于该值跳过
+- 清空而非删除目录：保留目录本身，只清空内容
+- 测试重定向：`JARVIS_CACHE_CLEAN_ROOT` env
+
+**权限声明**（10 项按目录拆分）：5 项 fs_read + 5 项 fs_delete，每目录独立 grant/revoke。
+
+**PERMISSION_REQUEST.md** 重写：逐项权限表 + 安全设计说明 + grant/revoke 命令示例。
+
+**实测**：dry-run 扫描出 10.94MB / 141 个文件（未删除）；双开关 confirm=false 拒绝；targets=["cache"] 只删 cache（其他不动）；完整 approve 流水线通过；未授予权限时 registry.run 拒绝执行；逐项 grant 10 项权限后真实删除 8 个 jarvis 遗留目录 ~10MB。
+
+### 新增（weather cron · 每日天气播报）
+
+- daemon.ts 注入 CapabilityRegistry（0.4 能力闭环运行时）
+- 注册第 5 个定时任务 weather-briefing：每 5 分钟检查一次，仅在每天 08:00-08:05 窗口内触发；dedupeKey 含日期（weather:YYYY-MM-DD）保证每日一次
+- 城市可配：`JARVIS_WEATHER_CITY` 环境变量（默认 Shanghai）
+- 仅在能力已注册且 enabled=1 时才调；返回 implemented=true + speech 才 rt.notify 播报；静默失败仅 console.error 不打扰用户
+- 启动日志加天气 cron 说明
+
+### 修复（易用性）
+
+- **resource 路径归一化**：shell 把 `~` 展开成绝对路径导致 grant 报「未在 skill.json 中声明」。加 `normalizeResource()` 让 `~` 前缀与绝对路径等价（`~/.cache ≡ /Users/<user>/.cache`），落库统一归一化为 `~` 前缀。网络资源（wttr.in:80）不做路径处理。
+
+### 新增（资产风险修复）
+
+- **guest 真实能力代码备份入库**：之前 Factory 生成的能力代码只存在于 guest `~/.local/share/jarvis/skills/`，VM 重装/损坏即全丢。本版加 `skills/` 目录，把 guest 侧代码完整回传入库：
+  - `skills/registered/`：已注册能力（sysinfo / weather-briefing / chrome-clean）
+  - `skills/staging/`：待审骨架（sys-cache-clean）
+  - `skills/README.md`：目录用途 + 同步协议 + 当前能力状态
+- 清理：staging 中冗余的 weather-briefing（已 approve 实现）已删
+
+### 文档
+
+- `MEMORY.md` 补完 2026-11-16 段：0.3 实时语音 / 0.4 能力闭环 / 人脸 v3.1 / 通道根治 / v0.3.0 发版；决策表加 #15（数字人脸 v3.1 + 真实振幅驱动口型）、#16（第六分支 invoke_capability）、#17（注册令牌制通道根治）；待验证风险加「真实麦克风人声实测未做」
+
+### 测试与质量
+
+- **292 单测全绿**（v0.3.0 的 251 + 本轮新增 41）：
+  - 8 个 grant/revoke 单测（声明校验 / 幂等 / 撤销 / 未注册异常）
+  - 5 个 registry.run 单测（零权限放行 / 未授予拒绝 / 全授予放行 / 部分授予拒绝 / revoke 后再 run 又被拒）
+  - 14 个 factory 三步单测（合法通过 / PATH 逃逸 / 绝对路径 / 通配权限 / 危险命令 / 注释不误报 / smoke 期望匹配 / 完整流水线 / 失败骨架保留）
+  - 9 个 develop 单测（成功生成 / PERMISSION_REQUEST.md 不改 / skill.json 不改 / needs_more_permissions / LLM 异常 / 无 sh 块 / 缺 shebang / 无骨架 / skeleton 备份幂等）
+  - 5 个 normalizeResource 单测（绝对路径匹配 / 幂等 / 绝对路径 revoke / 网络资源不受影响 / 非 home 绝对路径不归一化）
+- typecheck 通过
+
+### 当前能力盘点（v0.4.0）
+
+| 能力 | 状态 | 权限 |
+|---|---|---|
+| sysinfo | ✅ 已实现（参照） | 零 |
+| weather-briefing | ✅ 已实现 + 对话直调 + 每日 cron | network（wttr.in:80，可 grant） |
+| sys-cache-clean | ✅ 已实现（高危示范） | 10 项按目录拆分，逐项 grant |
+| chrome-clean | ⏳ 已注册骨架（implemented=false） | 待定 |
+
+### 剩余工程债
+
+- **真实麦克风人声实测**——live 链路目前仅 fixture 模拟验证
+- **chrome-clean 真实实现**——已 approve 注册但骨架未实现
+- **中长期**：记忆蒸馏机制；跨域记忆向量检索（当前 LIKE）；DeepSeek 备用模型
+- **PLAN Step 4.3 develop 增强**：当前 develop 一次调用 LLM，未来可加「LLM 自主多轮修复」（生成 → 沙箱测试 → 失败诊断 → 重新生成）
+
 ## [0.3.0] - 2026-11-16 — 实时语音 · Harness Factory 能力闭环 · 数字人脸 · 通道根治
 
 本版是 JARVIS 从「全栈进驻 Omarchy」走向「具身 + 自我扩展 + 生产可用」的关键跨越：
