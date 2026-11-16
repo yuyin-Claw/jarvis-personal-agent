@@ -49,6 +49,24 @@ export interface DevelopResult {
   requestedPermissions?: Array<{ capability: string; resource: string; mode: string }>;
 }
 
+export interface RepairOptions extends DevelopOptions {
+  /** 生成 + 沙箱失败后的最大总尝试轮数（含首次，默认 3） */
+  maxAttempts?: number;
+}
+
+export interface RepairAttempt {
+  attempt: number;
+  stage: "develop" | "security" | "sandbox";
+  ok: boolean;
+  reason?: string;
+}
+
+export interface RepairResult extends DevelopResult {
+  attempts: RepairAttempt[];
+  /** 多轮诊断日志（REPAIR_LOG.md） */
+  repairLogPath: string;
+}
+
 export interface GapReport {
   need: string;
   suggestedKind: string;
@@ -256,7 +274,10 @@ export class SkillFactory {
    * 沙箱测试（PLAN Step 4.3）：在 staging 目录内跑 skill.json 声明的 smoke 契约。
    * 不依赖 registry.register（staging 骨架未注册）；直接 SkillRunner 在 staging 内跑。
    */
-  async sandboxTest(name: string): Promise<{ ok: boolean; reason?: string }> {
+  async sandboxTest(
+    name: string,
+    options: { expect?: Record<string, unknown> } = {},
+  ): Promise<{ ok: boolean; reason?: string }> {
     const sanitized = sanitizeName(name);
     const src = path.join(this.stagingRoot, sanitized);
     const manifestPath = path.join(src, "skill.json");
@@ -277,7 +298,7 @@ export class SkillFactory {
         return { ok: false, reason: `smoke 执行失败 rc=${r.rc}：${r.stderr.slice(0, 200)}` };
       }
       const out = (r.output ?? {}) as Record<string, unknown>;
-      const expect = manifest.smoke.expect ?? {};
+      const expect = { ...(manifest.smoke.expect ?? {}), ...(options.expect ?? {}) };
       for (const [k, v] of Object.entries(expect)) {
         if (out[k] !== v) {
           return { ok: false, reason: `smoke 期望不匹配：${k} 期望 ${JSON.stringify(v)} 实际 ${JSON.stringify(out[k])}` };
@@ -526,6 +547,109 @@ ${skeletonCode}
     fs.writeFileSync(logPath, logSections.join("\n"), "utf8");
 
     return { ok: true, mainShPath, skeletonBackup, logPath };
+  }
+
+  /**
+   * 多轮 develop：生成 → security review → 真实 sandbox → 失败诊断 → 自动重写。
+   *
+   * - 复用 develop 的权限红线、超时清理与 LLM 响应解析；每轮把上一失败原因
+   *   追加到 user prompt，当前 main.sh 由 develop 重新读取。
+   * - 沙箱校验时仅临时覆盖 expect.implemented=true；成功后才写回 skill.json。
+   * - 不自动 approve；最终失败恢复最初 main.sh，所有尝试代码与日志另存供审阅。
+   */
+  async developWithRepair(name: string, opts: RepairOptions): Promise<RepairResult> {
+    const sanitized = sanitizeName(name);
+    const src = path.join(this.stagingRoot, sanitized);
+    const manifestPath = path.join(src, "skill.json");
+    const mainShPath = path.join(src, "main.sh");
+    const skeletonBackup = path.join(src, "main.sh.skeleton");
+    const logPath = path.join(src, "DEVELOP_LOG.md");
+    const repairLogPath = path.join(src, "REPAIR_LOG.md");
+    const originalCode = fs.existsSync(mainShPath) ? fs.readFileSync(mainShPath, "utf8") : "";
+    const attempts: RepairAttempt[] = [];
+    const requestedMax = opts.maxAttempts ?? 3;
+    const maxAttempts = Number.isFinite(requestedMax) ? Math.max(1, Math.floor(requestedMax)) : 3;
+    let lastReason = "尚未执行";
+
+    fs.writeFileSync(repairLogPath, `# REPAIR_LOG · ${sanitized}\n\n- 最大尝试轮数：${maxAttempts}\n`, "utf8");
+
+    for (let attempt = 1; attempt <= maxAttempts; attempt++) {
+      const previousFailure = lastReason;
+      const result = await this.develop(sanitized, {
+        ...opts,
+        generate: async (request) => {
+          if (attempt === 1) return opts.generate(request);
+          const messages = request.messages.map((m) => ({ ...m }));
+          const last = messages.length - 1;
+          if (last >= 0) {
+            messages[last]!.content += `\n\n【上一轮自动修复上下文】\n上一轮未通过，原因：${previousFailure}\n请针对该原因修复当前 main.sh，保持全部权限红线，只输出完整 sh 代码块。`;
+          }
+          return opts.generate({ ...request, messages });
+        },
+      });
+
+      if (fs.existsSync(logPath)) {
+        fs.copyFileSync(logPath, path.join(src, `DEVELOP_LOG.attempt-${attempt}.md`));
+      }
+      fs.appendFileSync(repairLogPath, `\n## 第 ${attempt} 轮\n\n`, "utf8");
+
+      if (result.requestedPermissions) {
+        attempts.push({ attempt, stage: "develop", ok: false, reason: result.reason });
+        fs.appendFileSync(repairLogPath, `需要更多权限：${result.reason}\n`, "utf8");
+        return { ...result, attempts, repairLogPath };
+      }
+      if (!result.ok) {
+        lastReason = result.reason ?? "develop 失败";
+        attempts.push({ attempt, stage: "develop", ok: false, reason: lastReason });
+        fs.appendFileSync(repairLogPath, `develop 失败：${lastReason}\n`, "utf8");
+        continue;
+      }
+
+      fs.copyFileSync(mainShPath, path.join(src, `main.sh.attempt-${attempt}`));
+      const sr = this.securityReview(sanitized);
+      if (!sr.ok) {
+        lastReason = sr.reason ?? "安全审查失败";
+        attempts.push({ attempt, stage: "security", ok: false, reason: lastReason });
+        fs.appendFileSync(repairLogPath, `security 失败：${lastReason}\n`, "utf8");
+        continue;
+      }
+
+      const st = await this.sandboxTest(sanitized, { expect: { implemented: true } });
+      if (st.ok) {
+        const manifest = JSON.parse(fs.readFileSync(manifestPath, "utf8")) as {
+          smoke?: { input?: unknown; expect?: Record<string, unknown> };
+        };
+        if (manifest.smoke) {
+          manifest.smoke.expect = { ...(manifest.smoke.expect ?? {}), implemented: true };
+          fs.writeFileSync(manifestPath, JSON.stringify(manifest, null, 2) + "\n", "utf8");
+        }
+        attempts.push({ attempt, stage: "sandbox", ok: true });
+        fs.appendFileSync(repairLogPath, `✓ security + sandbox 通过；已更新 smoke.expect.implemented=true。请审阅后 factory approve ${sanitized}。\n`, "utf8");
+        return { ...result, ok: true, attempts, repairLogPath };
+      }
+
+      lastReason = st.reason ?? "沙箱测试失败";
+      attempts.push({ attempt, stage: "sandbox", ok: false, reason: lastReason });
+      fs.appendFileSync(repairLogPath, `sandbox 失败：${lastReason}\n`, "utf8");
+    }
+
+    // 最终失败：恢复最初骨架，失败代码仅保留在 attempt 文件中，避免误 approve。
+    if (originalCode) {
+      fs.writeFileSync(mainShPath, originalCode, "utf8");
+      fs.chmodSync(mainShPath, 0o755);
+    } else if (fs.existsSync(mainShPath)) {
+      fs.rmSync(mainShPath, { force: true });
+    }
+    fs.appendFileSync(repairLogPath, `\n## 最终结果\n\n✗ ${maxAttempts} 轮后仍未通过，已恢复最初 main.sh。最后原因：${lastReason}\n`, "utf8");
+    return {
+      ok: false,
+      reason: `多轮修复失败（${maxAttempts} 轮）：${lastReason}`,
+      mainShPath,
+      skeletonBackup,
+      logPath,
+      attempts,
+      repairLogPath,
+    };
   }
 }
 

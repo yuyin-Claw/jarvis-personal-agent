@@ -272,6 +272,43 @@ async function main(): Promise<void> {
           console.error(`诊断日志：${r.logPath}`);
           process.exit(1);
         }
+      } else if (sub === "repair" && args[2]) {
+        // PLAN Step 4.3 多轮 develop：生成 → 沙箱 → 失败诊断 → 自动重写
+        const config = loadConfig();
+        const gateway = new LLMGateway();
+        gateway.register(new OpenAICompatibleProvider({
+          id: "zhipu",
+          baseUrl: config.baseUrl,
+          apiKey: config.apiKey,
+          models: [{ id: config.model, provider: "zhipu", vision: true }],
+        }));
+        console.log(`〔repair ${args[2]}〕最多 3 轮：生成 → 安全审查 → 沙箱 → 自动修复...`);
+        const r = await factory.developWithRepair(args[2], {
+          model: config.model,
+          generate: async (req) => {
+            const resp = await gateway.generate({
+              model: req.model,
+              messages: req.messages.map((m) => ({ role: m.role, content: m.content })),
+              temperature: req.temperature,
+              timeoutMs: req.timeoutMs,
+            });
+            return { content: resp.content };
+          },
+        });
+        if (r.ok) {
+          console.log(`✓ 已通过安全审查与沙箱（${r.attempts.length} 轮）`);
+          console.log(`  实现：${r.mainShPath}`);
+          console.log(`  多轮日志：${r.repairLogPath}`);
+          console.log(`下一步：审阅后 jarvis factory approve ${args[2]}`);
+        } else {
+          console.error(`✗ ${r.reason}`);
+          for (const a of r.attempts) console.error(`  第 ${a.attempt} 轮 ${a.stage}: ${a.reason ?? "通过"}`);
+          if (r.requestedPermissions) {
+            console.error(`  LLM 申请权限：${JSON.stringify(r.requestedPermissions)}`);
+          }
+          console.error(`  多轮日志：${r.repairLogPath}`);
+          process.exit(1);
+        }
       } else if (sub === "review" && args[2]) {
         // 独立安全审查（不注册）：调试骨架用
         const sr = factory.securityReview(args[2]);
@@ -288,7 +325,7 @@ async function main(): Promise<void> {
         if (st.ok) console.log(`✓ 沙箱测试通过`);
         else { console.error(`✗ 沙箱测试失败：${st.reason}`); process.exit(1); }
       } else {
-        console.error("用法：jarvis factory [list | draft \"<需求>\" <名> | develop <名> | approve <名> | reject <名> | review <名> | test <名>]");
+        console.error("用法：jarvis factory [list | draft \"<需求>\" <名> | develop <名> | repair <名> | approve <名> | reject <名> | review <名> | test <名>]");
         process.exit(1);
       }
     } finally {
