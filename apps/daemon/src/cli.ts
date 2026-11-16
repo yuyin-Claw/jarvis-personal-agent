@@ -191,8 +191,10 @@ async function main(): Promise<void> {
       ?? path.join(os.homedir(), ".local/share/jarvis/skills");
     const dbPath = process.env.JARVIS_CAP_DB
       ?? path.join(os.homedir(), ".local/share/jarvis/capabilities.db");
+    const stagingRoot = process.env.JARVIS_STAGING_ROOT
+      ?? path.join(os.homedir(), ".local/share/jarvis/.factory-staging");
     const registry = new CapabilityRegistry({ dbPath, skillsRoot });
-    const factory = new SkillFactory({ registry, skillsRoot });
+    const factory = new SkillFactory({ registry, skillsRoot, stagingRoot });
     try {
       if (sub === "draft") {
         // jarvis factory draft "<need>" <name>
@@ -210,12 +212,42 @@ async function main(): Promise<void> {
         if (drafts.length === 0) console.log("（staging 无待审批骨架）");
         else for (const d of drafts) console.log(`${d.name.padEnd(24)} ${d.need.slice(0, 40)}`);
       } else if (sub === "approve" && args[2]) {
-        const rec = factory.approve(args[2]);
-        console.log(`已批准并注册：${rec.name}@${rec.version}（权限：${rec.permissions.length} 项）`);
+        // PLAN Step 4.3 + Step 4.4 完整流水线：security review → sandbox test → register
+        // 红线默认开启：未通过任一步则拒绝注册
+        const r = await factory.approveWithReview(args[2]);
+        if (r.ok) {
+          const rec = r.record!;
+          console.log(`✓ 已批准并注册：${rec.name}@${rec.version}（权限：${rec.permissions.length} 项）`);
+          if (r.warnings && r.warnings.length > 0) {
+            console.log(`  警告：${r.warnings.join("; ")}`);
+          }
+        } else {
+          console.error(`✗ 批准失败（阶段 ${r.stage}）：${r.reason}`);
+          if (r.warnings && r.warnings.length > 0) {
+            console.error(`  警告：${r.warnings.join("; ")}`);
+          }
+          console.error(`  骨架保留在 staging，修复后重试`);
+          process.exit(1);
+        }
       } else if (sub === "reject" && args[2]) {
         console.log(factory.reject(args[2]) ? `已删除骨架：${args[2]}` : `staging 无此骨架：${args[2]}`);
+      } else if (sub === "review" && args[2]) {
+        // 独立安全审查（不注册）：调试骨架用
+        const sr = factory.securityReview(args[2]);
+        if (sr.ok) {
+          console.log(`✓ 安全审查通过${sr.warnings.length > 0 ? `（${sr.warnings.length} 条警告）` : ""}`);
+          for (const w of sr.warnings) console.log(`  ⚠ ${w}`);
+        } else {
+          console.error(`✗ 安全审查失败：${sr.reason}`);
+          process.exit(1);
+        }
+      } else if (sub === "test" && args[2]) {
+        // 独立沙箱测试（不注册）：调试骨架用
+        const st = await factory.sandboxTest(args[2]);
+        if (st.ok) console.log(`✓ 沙箱测试通过`);
+        else { console.error(`✗ 沙箱测试失败：${st.reason}`); process.exit(1); }
       } else {
-        console.error("用法：jarvis factory [list | draft \"<需求>\" <名> | approve <名> | reject <名>]");
+        console.error("用法：jarvis factory [list | draft \"<需求>\" <名> | approve <名> | reject <名> | review <名> | test <名>]");
         process.exit(1);
       }
     } finally {

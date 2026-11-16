@@ -14,6 +14,7 @@ import fs from "node:fs";
 import path from "node:path";
 import os from "node:os";
 import type { CapabilityRegistry } from "./registry.js";
+import { SkillRunner } from "./registry.js";
 
 export interface GapReport {
   need: string;
@@ -165,6 +166,151 @@ export class SkillFactory {
     fs.rmSync(src, { recursive: true, force: true });
     return true;
   }
+
+  // ---- PLAN Step 4.3 三步：develop / sandbox test / security review ----
+
+  /**
+   * 安全审查（PLAN Step 4.3 · ADR-011 红线）：扫 main.sh + 校验 manifest。
+   * 同步执行，纯静态扫描，不调 LLM。
+   */
+  securityReview(name: string): { ok: boolean; reason?: string; warnings: string[] } {
+    const src = path.join(this.stagingRoot, sanitizeName(name));
+    const manifestPath = path.join(src, "skill.json");
+    if (!fs.existsSync(manifestPath)) {
+      return { ok: false, reason: `staging 中无此骨架：${name}`, warnings: [] };
+    }
+    const warnings: string[] = [];
+    const manifest = JSON.parse(fs.readFileSync(manifestPath, "utf8")) as {
+      name: string;
+      entry?: { command?: string; args?: string[] };
+      permissions?: Array<{ capability: string; resource: string; mode: string }>;
+    };
+
+    // 1. entry.command 路径边界（必须在 skillsRoot 内的相对路径，禁止 PATH 逃逸）
+    const cmd = manifest.entry?.command ?? "";
+    if (!cmd) return { ok: false, reason: "manifest.entry.command 缺失", warnings };
+    if (cmd.includes("..")) {
+      return { ok: false, reason: `entry.command 含 PATH 逃逸（..）：${cmd}`, warnings };
+    }
+    if (cmd.startsWith("/")) {
+      return { ok: false, reason: `entry.command 不允许绝对路径：${cmd}（必须 skillsRoot 内相对路径）`, warnings };
+    }
+    if (!cmd.startsWith("./")) {
+      warnings.push(`entry.command 建议 ./ 前缀（当前 ${cmd}）`);
+    }
+
+    // 2. 权限声明合理性（禁止通配、根目录）
+    for (const p of manifest.permissions ?? []) {
+      if (p.resource === "*" || p.resource === "/*" || p.resource === "/") {
+        return { ok: false, reason: `权限声明 resource 过宽：${p.resource}（禁止 * / / 根）`, warnings };
+      }
+    }
+
+    // 3. main.sh 危险命令静态扫描
+    const mainPath = path.join(src, "main.sh");
+    if (fs.existsSync(mainPath)) {
+      const code = fs.readFileSync(mainPath, "utf8");
+      const dangerous = scanDangerous(code);
+      if (dangerous.length > 0) {
+        return { ok: false, reason: `main.sh 含危险命令：${dangerous.join("; ")}`, warnings };
+      }
+    }
+
+    return { ok: true, warnings };
+  }
+
+  /**
+   * 沙箱测试（PLAN Step 4.3）：在 staging 目录内跑 skill.json 声明的 smoke 契约。
+   * 不依赖 registry.register（staging 骨架未注册）；直接 SkillRunner 在 staging 内跑。
+   */
+  async sandboxTest(name: string): Promise<{ ok: boolean; reason?: string }> {
+    const sanitized = sanitizeName(name);
+    const src = path.join(this.stagingRoot, sanitized);
+    const manifestPath = path.join(src, "skill.json");
+    if (!fs.existsSync(manifestPath)) {
+      return { ok: false, reason: `staging 中无此骨架：${name}` };
+    }
+    const manifest = JSON.parse(fs.readFileSync(manifestPath, "utf8")) as {
+      smoke?: { input: unknown; expect?: Record<string, unknown> };
+    };
+    if (!manifest.smoke) {
+      return { ok: false, reason: "skill.json 未声明 smoke 契约" };
+    }
+    // 用 stagingRoot 作为临时 skillsRoot 跑 smoke（目录结构 staging/<name>/ 与 skills/<name>/ 同形）
+    const runner = new SkillRunner(this.stagingRoot);
+    try {
+      const r = await runner.run(sanitized, manifest.smoke.input, { timeoutMs: 15_000 });
+      if (r.rc !== 0) {
+        return { ok: false, reason: `smoke 执行失败 rc=${r.rc}：${r.stderr.slice(0, 200)}` };
+      }
+      const out = (r.output ?? {}) as Record<string, unknown>;
+      const expect = manifest.smoke.expect ?? {};
+      for (const [k, v] of Object.entries(expect)) {
+        if (out[k] !== v) {
+          return { ok: false, reason: `smoke 期望不匹配：${k} 期望 ${JSON.stringify(v)} 实际 ${JSON.stringify(out[k])}` };
+        }
+      }
+      return { ok: true };
+    } catch (e) {
+      return { ok: false, reason: `smoke 执行异常：${(e as Error).message}` };
+    }
+  }
+
+  /**
+   * 完整批准流水线（PLAN Step 4.3 + Step 4.4）：
+   * security review → sandbox test → register
+   * 任一步失败：拒绝注册并返回诊断；骨架保留在 staging 供修复后重试。
+   */
+  async approveWithReview(name: string): Promise<{
+    ok: boolean;
+    stage: "security" | "sandbox" | "register" | "done";
+    reason?: string;
+    warnings?: string[];
+    record?: ReturnType<CapabilityRegistry["register"]>;
+  }> {
+    // 1. 安全审查
+    const sr = this.securityReview(name);
+    if (!sr.ok) {
+      return { ok: false, stage: "security", reason: sr.reason, warnings: sr.warnings };
+    }
+    // 2. 沙箱测试
+    const st = await this.sandboxTest(name);
+    if (!st.ok) {
+      return { ok: false, stage: "sandbox", reason: st.reason, warnings: sr.warnings };
+    }
+    // 3. 注册（复用 approve 的移入 + 注册逻辑）
+    try {
+      const rec = this.approve(name);
+      return { ok: true, stage: "done", record: rec, warnings: sr.warnings };
+    } catch (e) {
+      return { ok: false, stage: "register", reason: (e as Error).message, warnings: sr.warnings };
+    }
+  }
+}
+
+/** 危险命令模式（PLAN Step 4.3 security review） */
+const DANGEROUS_PATTERNS: Array<{ re: RegExp; label: string }> = [
+  { re: /\brm\s+(-[a-zA-Z]*f[a-zA-Z]*\s+)?\/(\s|$|\*)/, label: "rm -rf /" },
+  { re: /\bdd\s+if=/, label: "dd 磁盘写" },
+  { re: /\bmkfs\./, label: "mkfs 格式化" },
+  { re: /:\(\)\s*\{.*\|.*&\s*\}\s*;:/, label: "fork 炸弹" },
+  { re: /\bchmod\s+(-R\s+)?777\s+\/(\s|$)/, label: "chmod 777 /" },
+  { re: /\bcurl[^|]*\|\s*(ba|z)?sh/, label: "curl|sh 远程执行" },
+  { re: /\bwget[^|]*\|\s*(ba|z)?sh/, label: "wget|sh 远程执行" },
+  { re: />\s*\/dev\/sd[a-z]/, label: "直接写磁盘" },
+  { re: /\beval\s+\$\(/, label: "eval 命令注入" },
+  { re: /\bnc\s+-[a-z]*l/, label: "nc 监听后门" },
+];
+
+function scanDangerous(code: string): string[] {
+  const hits: string[] = [];
+  // 去掉注释行，避免误报
+  const lines = code.split("\n").filter((l) => !l.trim().startsWith("#"));
+  const body = lines.join("\n");
+  for (const { re, label } of DANGEROUS_PATTERNS) {
+    if (re.test(body)) hits.push(label);
+  }
+  return hits;
 }
 
 function sanitizeName(raw: string): string {
