@@ -3,6 +3,125 @@
 本项目的显著变更记录在此。格式参照 [Keep a Changelog](https://keepachangelog.com/zh-CN/1.1.0/)，
 版本号遵循 [SemVer](https://semver.org/lang/zh-CN/)。
 
+## [0.3.0] - 2026-11-16 — 实时语音 · Harness Factory 能力闭环 · 数字人脸 · 通道根治
+
+本版是 JARVIS 从「全栈进驻 Omarchy」走向「具身 + 自我扩展 + 生产可用」的关键跨越：
+
+- **ADR-012 实时麦克风语音链路**：VAD 分段 → 本地 whisper.cpp ASR → 事件流，从「说完再识别」进化为「边说边听」
+- **ADR-011 Harness Factory 能力闭环**：capability_gap 探测 → Skill 工厂骨架生成 → 用户审批 → 注册 → **对话直调 invoke_capability**——从「我还不会」到「我学会了并能用」全链路自动化（审批门保留给用户）
+- **数字人脸 v3.1**：从全息光球到「由粒子组成的人脸」（蛋形轮廓 + 杏仁眼 + M 唇 + 面部体积点），并由**真实 TTS 振幅驱动口型**——表现层真实反映系统状态，不再播放预制动画
+- **验证通道根治**：注册令牌制 + flock 单实例，旧代理（无 token 的 curl 残留）在协议层被永久淘汰
+- **首个真实能力 weather-briefing**：wttr.in 只读 + 英中映射，对话直调返回真实天气
+
+### 新增（0.3 实时语音，ADR-012）
+
+- `apps/voice-service` 实时麦克风链路：PipeWire `pw-record` 采集 → VAD 段检测
+  （按音频字节数换算时长，避免批量 tick 中 Date.now 几乎不流逝的坑）→ whisper.cpp 本地转写 →
+  事件流（speech_start / partial / final / speech_end）
+- PipeWire null-sink 持久化：`~/.config/pipewire/pipewire.conf.d/jarvis-mic.conf`，
+  VM 重启后自动加载虚拟麦克风，不再每次手动 `pactl load-module`
+- 打断语义：speech_start 立即打断 TTS 并回 listening；partial 到达不误派 tts_end；
+  说完才进 thinking
+- 跨系统验收 `verify-omarchy-live.mjs`：E2E_LIVE_PASS 全链路断言
+
+### 新增（0.4 Harness Factory 能力闭环，ADR-011）
+
+- **Step 4.1 能力注册表** `@jarvis/capability-registry`：Skill 契约（skill.json）+
+  CapabilityRegistry（capabilities.db），支持 list / register / health / run
+- **Step 4.2 capability_gap 决策分支**：Orchestrator 新增第五种意图——用户诉求超出当前能力时，
+  不再只回答「我不会」，而是产出结构化 gap 描述
+- **Step 4.3 Skill 工厂**：gap → LLM 生成 Skill 骨架（main.sh + skill.json + smoke 断言）→
+  staging 目录待审 → 用户 `capabilities approve <name>` 批准 → 注册入 registry
+- **Step 4.4 运行时集成**：daemon 监听 capability_gap 事件 → 自动起工厂 → 审批通知；
+  cli `capabilities` 子命令（list/health/run/approve/reject）
+- **能力闭环最后一环 invoke_capability**：Orchestrator 新增第六分支——当已注册能力
+  能完成用户诉求时直接调用；cli 分发 SkillRunner.run → result.speech 优先输出
+- 修复 registry description 陈旧坑：skill.json 更新后必须 SQL 同步 capabilities.db，
+  否则 GLM 能力清单读到的还是「待实现骨架」旧描述
+
+### 新增（数字人脸 v2 → v3.1）
+
+- **v2**（318de8e）：粒子拓扑从全息球改为「由光点组成的人脸」——基础轮廓 + 眼 + 唇 + 口型同步
+- **v3.1**（d70bef5）：拓扑精细版——蛋形轮廓、杏仁眼（上下眼睑 + 眼神光）、M 形唇峰、
+  下颌收拢、面部体积填充点；粒子数 137 → ~320，密度足够才有「脸」的感觉
+- **真实 TTS 振幅驱动口型**（eb15af1）：
+  - `analyzeAmplitude(wav, sampleRate)`：wav 44 字节头后读 s16le，每 20ms 一帧 RMS 归一化 [0,1]
+  - `VoiceServiceSpeechOutput` 新增 `onAmplitude?: (a:number)=>void` 选项
+  - speak() 播放段：定时器按帧推包络值；结束推 0（口型闭合）
+  - `withVoiceService` 自动接线 onAmplitude → `platform.avatarHost.setState({state:'speaking', amplitude:a})`
+- **unit 附着渲染架构修复**：`omarchy-adapter.start()` 检测已有 socket 则复用而非 spawn 竞争；
+  `setState` 在 socket 存在时即可写（不再依赖 proc），否则振幅帧会被静默丢弃
+
+### 修复（验证通道根治，提交 2ece595）
+
+- **宿主 server 令牌门** `guest-bridge.mjs`：`/register` 签发 token；
+  `/cmd` `/out` 严格校验（未注册或不匹配一律 HTTP 204 空，不出队不消耗命令）
+- **agent v3** `jarvis-bridge-agent.sh`：flock 单实例锁 + 启动即注册 + 全程带 token +
+  空转 5 次自动重注册（server 重启 ~5 秒自愈，无需人工）
+- **部署脚本** `deploy-bridge-agent.sh`：清旧 curl 代理 + unit 更新（StartLimitBurst=0）
+- **根治原理**：之前通道反复断裂的根因是旧 curl 代理残留与新 agent 竞争 `/cmd` 队列；
+  注册令牌制让无 token 请求永远拿不到命令——协议层结构性消除，不是清理式临时修复
+- **实测**：5 连发 gexec 全成功；无 token → 204 空淘汰；合法 token → 200 出队
+
+### 新增（首个真实能力 weather-briefing，提交 056a5a9）
+
+- 实现：wttr.in HTTP 只读（`format=j1` 无需 key）+ 常见天气英中映射（~20 个常见词兜底英文）
+- 安全：仅 network 权限申请单（wttr.in:80），无文件写入、无系统调用
+- 验证：health healthy；run 北京 7°C、上海 18°C 真实数据
+- **完整链路实测**：
+  ```
+  你：上海今天天气怎么样
+  JARVIS：〔我来查询上海今天的实时天气。〕
+         上海现在气温18度，霾，体感16度，风速每小时11公里，湿度55%。
+  ```
+  GLM 判 invoke_capability → SkillRunner 真实执行 → 返回真实天气播报
+- ADR-011 能力闭环至此完整：**gap 探测 → 骨架生成 → 用户审批 → 注册 → 对话直调**——
+  JARVIS 现在能自己长出能力并用起来
+
+### 测试与质量
+
+- **十域 25 项冒烟断言脚本化**（1d7afd4）：
+  - 域 1 systemd 生产常驻（4 断言）
+  - 域 2 配置健康（1 断言：hyprctl configerrors 空）
+  - 域 3 语音引擎（2 断言：health 全本地 + ASR/TTS 实调）
+  - 域 4 实时语音链路（1 断言：E2E_LIVE_PASS）
+  - 域 5 对话与审批（5 断言：answer / 记忆跨会话召回 / 高危审批门 / 状态机 / 审计）
+  - 域 6 数字人（3 断言：窗口唯一 / 帧驱动 thinking / **真实振幅 speaking 帧**）
+  - 域 7 能力闭环（4 断言：sysinfo healthy / run 真实值 / factory staging 待审）
+  - 域 8 通知与状态机（2 断言：通知落盘 / 无 RUNNING 悬空）
+  - 域 9 数据层（2 断言：核心表齐全 / 记忆零重复）
+  - 域 10 管道多轮（1 断言：2 轮回复）
+- 固化 `scripts/smoke/`（part1/part2 + PipeWire 配置 + README），可在 guest 内重复执行
+- 251 单测全绿；12 项对话深测全过
+
+### 修复（工程债）
+
+- **CLI 管道多轮对话修复**（d84c423）：非 TTY 走逐行读取，不再丢输入
+- **Omarchy 窗口规则键名**（a0a771a）：`jarvis.lua` 改用 `no_blur` / `no_initial_focus`
+  （原 `noblur` / `noinitialfocus` 是无效键导致顶部报「your config has errors」）
+- **daemon 冒烟打磨**（9fa9c40）：孤儿任务恢复 + 工作目录自建 + 执行失败终态保障
+- **factory 导入 type-only**（c6aba94）：自引用包路径修正
+- **构建产物清理**（ce2cc06）：清理误入 src 的编译产物 + gitignore 防复发
+- **bridge 可靠性**（bb6c6d4）：验证通道 + ADR-010 开机自启实弹闭环
+
+### 验收
+
+- 十域 25 项冒烟断言 **25/25 全 PASS**
+- 251 单测全绿
+- 12 项对话深测全过（含记忆跨会话召回 / 五分支意图 / 高危审批 / 沙箱执行）
+- 通道 5 连发 gexec 全成功 + 旧代理淘汰实测通过
+- 真实天气对话直调全链路实测成功
+
+### 已知剩余工程债
+
+- weather-briefing 目前只能手动调用，**每日定时调度**（cron 接入 runtime 调度器）未做
+- sys-cache-clean 第二个真实能力（高危删除类，需逐项权限申请单）骨架待实现
+- chrome-clean 已 approve 注册但未实现
+- 真实麦克风人声实测：live 链路目前仅 fixture 模拟验证，真人声音未测
+- 记忆蒸馏机制：memories 表已有但蒸馏逻辑未写
+- 跨域记忆向量检索：当前是 LIKE 检索，未接向量
+- DeepSeek 备用模型：无 key 未接
+
 ## [0.2.1] - 2026-11-15 — 语音服务化 · 生产化部署 · 全栈进驻 Omarchy
 
 本版把 JARVIS 从「macOS 上开发的跨系统验证」推进为「Omarchy 内完整自治运行」：
