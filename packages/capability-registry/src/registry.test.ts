@@ -212,3 +212,68 @@ describe("CapabilityRegistry 权限授予（PLAN Step 4.4 红线）", () => {
     expect(declared.map((d) => d.capability)).toEqual(["network", "fs_read"]);
   });
 });
+
+describe("registry.run 安全入口（ADR-011 红线：未授予权限拒绝执行）", () => {
+  const manifestZeroPerm = {
+    name: "sysinfo", version: "0.1.0",
+    entry: { command: "./main.sh" },
+    permissions: [],
+  };
+  const manifestNetworkDecl = {
+    name: "weather-briefing", version: "0.1.0",
+    entry: { command: "./main.sh" },
+    permissions: [{ capability: "network", resource: "wttr.in:80", mode: "connect" }],
+  };
+  const mainOk = `#!/bin/sh\ncat > /dev/null\necho '{"ok":true,"implemented":true,"result":{"speech":"晴"}}'\n`;
+
+  it("零权限能力（无声明）直接放行", async () => {
+    writeSkill("sysinfo", manifestZeroPerm, mainOk);
+    registry.register({ name: "sysinfo", version: "0.1.0", kind: "skill", entry: "sysinfo" });
+    const r = await registry.run("sysinfo", {});
+    expect(r.rc).toBe(0);
+    expect((r.output as { ok?: boolean }).ok).toBe(true);
+  });
+
+  it("声明权限但未授予 → 拒绝执行（红线）", async () => {
+    writeSkill("weather-briefing", manifestNetworkDecl, mainOk);
+    registry.register({ name: "weather-briefing", version: "0.1.0", kind: "skill", entry: "weather-briefing" });
+    await expect(registry.run("weather-briefing", {}))
+      .rejects.toThrow(/权限未授予.*wttr\.in:80/);
+  });
+
+  it("声明权限已全部授予 → 放行", async () => {
+    writeSkill("weather-briefing", manifestNetworkDecl, mainOk);
+    registry.register({ name: "weather-briefing", version: "0.1.0", kind: "skill", entry: "weather-briefing" });
+    registry.grantPermission("weather-briefing", { capability: "network", resource: "wttr.in:80", mode: "connect" });
+    const r = await registry.run("weather-briefing", {});
+    expect(r.rc).toBe(0);
+    expect((r.output as { ok?: boolean }).ok).toBe(true);
+  });
+
+  it("部分授予（声明 2 项只 grant 1 项）→ 拒绝执行", async () => {
+    const twoDecl = {
+      name: "two-perm", version: "0.1.0",
+      entry: { command: "./main.sh" },
+      permissions: [
+        { capability: "network", resource: "wttr.in:80", mode: "connect" },
+        { capability: "fs_read", resource: "~/.cache/jarvis", mode: "read" },
+      ],
+    };
+    writeSkill("two-perm", twoDecl, mainOk);
+    registry.register({ name: "two-perm", version: "0.1.0", kind: "skill", entry: "two-perm" });
+    registry.grantPermission("two-perm", { capability: "network", resource: "wttr.in:80", mode: "connect" });
+    await expect(registry.run("two-perm", {}))
+      .rejects.toThrow(/权限未授予.*fs_read.*~\/\.cache\/jarvis/);
+  });
+
+  it("revoke 后再 run 又被拒绝（撤销即生效）", async () => {
+    writeSkill("weather-briefing", manifestNetworkDecl, mainOk);
+    registry.register({ name: "weather-briefing", version: "0.1.0", kind: "skill", entry: "weather-briefing" });
+    registry.grantPermission("weather-briefing", { capability: "network", resource: "wttr.in:80", mode: "connect" });
+    const r1 = await registry.run("weather-briefing", {});
+    expect(r1.rc).toBe(0);
+    registry.revokePermission("weather-briefing", "network", "wttr.in:80");
+    await expect(registry.run("weather-briefing", {}))
+      .rejects.toThrow(/权限未授予/);
+  });
+});

@@ -32,7 +32,7 @@ import { SqliteMemoryEngine } from "@jarvis/memory";
 import { SqliteTaskManager } from "@jarvis/task-manager";
 import { Orchestrator } from "@jarvis/orchestrator";
 import { CodingHarness, PermissionBroker, type AuditEntry } from "@jarvis/harness-runtime";
-import { CapabilityRegistry, SkillRunner, SkillFactory } from "@jarvis/capability-registry";
+import { CapabilityRegistry, SkillFactory } from "@jarvis/capability-registry";
 import { ContextEngine } from "@jarvis/context-engine";
 import type { AwarenessSource } from "@jarvis/context-engine";
 import { ConversationGateway } from "./gateway.js";
@@ -86,13 +86,19 @@ async function main(): Promise<void> {
         }
       } else if (sub === "run" && args[2]) {
         // jarvis capabilities run <name> [json-arg]
+        // 走 registry.run 安全入口（先校验权限再执行，ADR-011 红线）
         let inputArg: unknown = {};
         if (args[3]) { try { inputArg = JSON.parse(args[3]); } catch { console.error("输入参数不是合法 JSON"); process.exit(1); } }
         const manifest = registry.loadManifest(args[2]);
         if (!manifest) { console.error(`Skill 不存在：${args[2]}（skillsRoot=${skillsRoot}）`); process.exit(1); }
-        const r = await new SkillRunner(skillsRoot).run(args[2], inputArg);
-        console.log(JSON.stringify(r.output, null, 2));
-        if (r.rc !== 0) console.error(`（rc=${r.rc}，${r.durationMs}ms）${r.stderr.slice(0, 200)}`);
+        try {
+          const r = await registry.run(args[2], inputArg);
+          console.log(JSON.stringify(r.output, null, 2));
+          if (r.rc !== 0) console.error(`（rc=${r.rc}，${r.durationMs}ms）${r.stderr.slice(0, 200)}`);
+        } catch (e) {
+          console.error(`✗ ${(e as Error).message}`);
+          process.exit(1);
+        }
       } else if (sub === "health" && args[2]) {
         const h = await registry.healthCheck(args[2]);
         console.log(`${args[2]}: ${h}`);
@@ -537,8 +543,7 @@ async function main(): Promise<void> {
     // 2. 按决策执行
     if (d.type === "invoke_capability" && d.invoke) {
       // 已注册能力的真实执行（能力闭环最后一环：对话→能力→结果）
-      const { SkillRunner } = await import("@jarvis/capability-registry");
-      const runner = new SkillRunner(capSkillsRoot);
+      // 走 capRegistry.run 安全入口（先校验权限，ADR-011 红线）
       try {
         const rec = capRegistry.findByName(d.invoke.name);
         if (!rec) {
@@ -549,7 +554,7 @@ async function main(): Promise<void> {
           return;
         }
         if (d.text) console.log(`〔${d.text}〕`);
-        const result = await runner.run(d.invoke.name, { args: d.invoke.args ?? {} });
+        const result = await capRegistry.run(d.invoke.name, { args: d.invoke.args ?? {} });
         // RunResult.output 是 skill 的 stdout JSON：{ok, implemented, result}
         const r = (result.output ?? {}) as { ok?: boolean; implemented?: boolean; result?: { speech?: string }; error?: string };
         let reply: string;

@@ -213,6 +213,37 @@ export class CapabilityRegistry {
     return (manifest?.permissions ?? []) as Permission[];
   }
 
+  /**
+   * 安全执行入口（PLAN Step 4.4 红线）：先校验权限再调底层 SkillRunner。
+   *
+   * 规则：
+   * - skill.json 未声明任何权限（零权限能力）→ 直接放行
+   * - 声明了权限但 capabilities.db 未全部授予 → 拒绝执行（throw）
+   * - 声明的权限全部已授予 → 放行
+   *
+   * 这是 ADR-011 红线「未授予权限的能力不能执行」的运行时落地。
+   * 调用方（cli invoke_capability / daemon cron / capabilities run）必须使用此入口，
+   * 不得绕过直接 new SkillRunner。
+   */
+  async run(name: string, input: unknown, opts: { timeoutMs?: number } = {}): Promise<RunResult> {
+    const declared = this.getDeclaredPermissions(name);
+    if (declared.length === 0) {
+      // 零权限能力直接放行
+      return await new SkillRunner(this.skillsRoot).run(name, input, opts);
+    }
+    const granted = this.getPermissions(name);
+    const missing = declared.filter((d) => !granted.some((g) =>
+      g.capability === d.capability && g.resource === d.resource && g.mode === d.mode));
+    if (missing.length > 0) {
+      const missingStr = missing.map((m) => `${m.capability}/${m.resource}/${m.mode}`).join(", ");
+      throw new Error(
+        `权限未授予，拒绝执行 ${name}：缺失 ${missingStr}。`
+        + `请先 jarvis capabilities grant ${name} <capability> <resource> <mode> 逐项批准。`,
+      );
+    }
+    return await new SkillRunner(this.skillsRoot).run(name, input, opts);
+  }
+
   private hydrate(row: CapabilityRecord): CapabilityRecord {
     return { ...row, permissions: JSON.parse(String(row.permissions ?? "[]")) };
   }

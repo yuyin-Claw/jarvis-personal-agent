@@ -22,7 +22,7 @@ import { SqliteMemoryEngine } from "@jarvis/memory";
 import { SqliteTaskManager } from "@jarvis/task-manager";
 import { ContinuousRuntime, findStagnantTasks, type NotifyChannel, type ProactiveNotice } from "@jarvis/runtime";
 import { ContextEngine, type AwarenessSource } from "@jarvis/context-engine";
-import { CapabilityRegistry, SkillRunner } from "@jarvis/capability-registry";
+import { CapabilityRegistry } from "@jarvis/capability-registry";
 import { loadConfig } from "./config.js";
 import { initPlatform } from "./platform.js";
 import { createEmbodiedRuntime } from "./embodied.js";
@@ -77,7 +77,6 @@ async function main(): Promise<void> {
   const capSkillsRoot = process.env.JARVIS_SKILLS_ROOT
     ?? path.join(os.homedir(), ".local/share/jarvis/skills");
   const capRegistry = new CapabilityRegistry({ dbPath: capDbPath, skillsRoot: capSkillsRoot });
-  const skillRunner = new SkillRunner(capSkillsRoot);
 
   // ---- 平台适配 + 具身运行时（ADR-007 / 0.2-④⑤） ----
   const platform = await initPlatform();
@@ -212,7 +211,8 @@ async function main(): Promise<void> {
       const rec = capRegistry.findByName("weather-briefing");
       if (!rec || rec.enabled !== 1) return;
       try {
-        const result = await skillRunner.run("weather-briefing", { args: { city } });
+        // 走 capRegistry.run 安全入口（先校验权限，ADR-011 红线）
+        const result = await capRegistry.run("weather-briefing", { args: { city } });
         const r = (result.output ?? {}) as { ok?: boolean; implemented?: boolean; result?: { speech?: string }; error?: string };
         if (r.ok && r.implemented && r.result?.speech) {
           await rt.notify({
