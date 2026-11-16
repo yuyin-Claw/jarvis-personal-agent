@@ -9,12 +9,45 @@
  *  - approve(name)：用户显式批准 → 移入 skillsRoot + 注册（权限恒零授予，
  *    申请单中的权限仅是「申请」，授予需用户逐项在 capabilities.db 手工
  *    落库——Factory 不提供该路径）
+ *  - develop(name, opts)：调度 LLM 把骨架 main.sh 改写为真实实现；
+ *    不自动 approve（用户审阅后再 approve），不修改 PERMISSION_REQUEST.md
+ *    与 skill.json 的 permissions（红线：申请单只能用户改）
  */
 import fs from "node:fs";
 import path from "node:path";
 import os from "node:os";
 import type { CapabilityRegistry } from "./registry.js";
 import { SkillRunner } from "./registry.js";
+
+/** LLM 生成函数（依赖注入；调用方适配 LLMGateway.generate，避免本包依赖 llm-gateway） */
+export type LLMGenerateFn = (request: {
+  model: string;
+  messages: Array<{ role: "system" | "user" | "assistant"; content: string }>;
+  temperature?: number;
+  /** 单请求超时毫秒数（与 LLMGateway.LLMRequest.timeoutMs 对齐） */
+  timeoutMs?: number;
+}) => Promise<{ content: string }>;
+
+export interface DevelopOptions {
+  generate: LLMGenerateFn;
+  model: string;
+  /** 调用超时（毫秒，默认 5 分钟——真实代码生成可能需要较长时间） */
+  timeoutMs?: number;
+}
+
+export interface DevelopResult {
+  ok: boolean;
+  /** 失败原因（LLM 异常 / 响应无代码块 / 需要更多权限等） */
+  reason?: string;
+  /** 真实实现 main.sh 路径 */
+  mainShPath: string;
+  /** 原骨架备份路径（main.sh.skeleton） */
+  skeletonBackup: string;
+  /** 诊断日志路径（DEVELOP_LOG.md，含 prompt + 原始响应 + 提取的代码） */
+  logPath: string;
+  /** LLM 声明需要更多权限时（不生成代码），此处携带申请项（供用户追加到 PERMISSION_REQUEST.md） */
+  requestedPermissions?: Array<{ capability: string; resource: string; mode: string }>;
+}
 
 export interface GapReport {
   need: string;
@@ -285,6 +318,205 @@ export class SkillFactory {
     } catch (e) {
       return { ok: false, stage: "register", reason: (e as Error).message, warnings: sr.warnings };
     }
+  }
+
+  /**
+   * 调度 LLM 把 staging 骨架 main.sh 改写为真实实现（PLAN Step 4.3 develop 步）。
+   *
+   * 最小版（用户裁决 2026-11-16）：
+   * - 不自动 approve——生成后用户审阅 main.sh，再 factory approve
+   * - 不修改 PERMISSION_REQUEST.md / skill.json 的 permissions（红线：申请单只能用户改）
+   * - LLM 声明需要更多权限时不生成代码，返回 requestedPermissions 供用户追加
+   * - 失败时 main.sh 不变（骨架保留）
+   *
+   * 流程：
+   * 1. 加载 staging/<name>/{skill.json, main.sh, PERMISSION_REQUEST.md}
+   * 2. 备份 main.sh → main.sh.skeleton（幂等）
+   * 3. 构造 prompt（需求 + 契约 + 当前骨架 + 已声明权限）
+   * 4. 调 generate
+   * 5. 提取 ```sh ... ``` 代码块
+   * 6. 写回 main.sh + 落 DEVELOP_LOG.md 诊断
+   */
+  async develop(name: string, opts: DevelopOptions): Promise<DevelopResult> {
+    const sanitized = sanitizeName(name);
+    const src = path.join(this.stagingRoot, sanitized);
+    const manifestPath = path.join(src, "skill.json");
+    const mainShPath = path.join(src, "main.sh");
+    const skeletonBackup = path.join(src, "main.sh.skeleton");
+    const logPath = path.join(src, "DEVELOP_LOG.md");
+    const permRequestPath = path.join(src, "PERMISSION_REQUEST.md");
+
+    if (!fs.existsSync(manifestPath)) {
+      return {
+        ok: false, reason: `staging 中无此骨架：${name}`,
+        mainShPath, skeletonBackup, logPath,
+      };
+    }
+    const manifest = JSON.parse(fs.readFileSync(manifestPath, "utf8")) as {
+      name: string;
+      description?: string;
+      input?: Record<string, unknown>;
+      output?: Record<string, unknown>;
+      smoke?: { input: unknown; expect?: Record<string, unknown> };
+      permissions?: Array<{ capability: string; resource: string; mode: string }>;
+    };
+    const skeletonCode = fs.existsSync(mainShPath) ? fs.readFileSync(mainShPath, "utf8") : "";
+    const permRequest = fs.existsSync(permRequestPath)
+      ? fs.readFileSync(permRequestPath, "utf8")
+      : "（无权限申请单）";
+
+    // 1. 备份骨架（幂等）
+    if (!fs.existsSync(skeletonBackup) && skeletonCode) {
+      fs.writeFileSync(skeletonBackup, skeletonCode, "utf8");
+    }
+
+    // 2. 构造 prompt
+    const systemPrompt = `你是 JARVIS Skill 开发者。任务：把 staging 中的 main.sh 骨架（implemented=false）改写为真实实现（implemented=true）。
+
+【契约要求】
+- 输入：stdin JSON（结构见 skill.json.input）
+- 输出：stdout JSON，必须含 ok/implemented/result 三键
+- 必须设置 "implemented": true
+- 必须满足 skill.json.smoke.expect 声明的所有键值
+- 保持 POSIX sh 兼容（guest 内是 dash/bash）
+- 工作目录 cwd 已是 skill 目录，使用相对路径
+
+【红线（必须遵守）】
+- 只能使用 skill.json.permissions 中已声明的权限
+- 不得读写权限声明外的路径
+- 不得访问权限声明外的网络/主机
+- 禁止危险命令：rm -rf /, dd if=, mkfs, curl|sh, wget|sh, eval \$(...), chmod 777 /, > /dev/sd*
+- entry.command 必须是 ./main.sh 或 skillsRoot 内相对路径（禁止 .. 与绝对路径）
+
+【输出格式】
+- 成功：仅输出一个 \`\`\`sh ... \`\`\` 代码块，含完整 main.sh（#!/bin/sh 开头）
+- 无法在当前权限内实现：输出 \`\`\`json ... \`\`\` 块：
+  {"error":"needs_more_permissions","requested":[{"capability":"...","resource":"...","mode":"..."}],"reason":"..."}`;
+
+    const userPrompt = `【需求】${manifest.description ?? name}
+
+【skill.json.input 契约】
+${JSON.stringify(manifest.input ?? {}, null, 2)}
+
+【skill.json.output 契约】
+${JSON.stringify(manifest.output ?? {}, null, 2)}
+
+【skill.json.smoke 契约】
+${JSON.stringify(manifest.smoke ?? {}, null, 2)}
+
+【已声明权限】
+${JSON.stringify(manifest.permissions ?? [], null, 2)}
+
+【PERMISSION_REQUEST.md】
+${permRequest}
+
+【当前骨架 main.sh】
+\`\`\`sh
+${skeletonCode}
+\`\`\`
+
+请输出真实实现的 main.sh（一个 \`\`\`sh 代码块）。`;
+
+    // 3. 调 LLM
+    let llmContent = "";
+    let llmError = "";
+    try {
+      const timeoutMs = opts.timeoutMs ?? 5 * 60_000;
+      const result = await Promise.race([
+        opts.generate({
+          model: opts.model,
+          messages: [
+            { role: "system", content: systemPrompt },
+            { role: "user", content: userPrompt },
+          ],
+          temperature: 0.2,
+          timeoutMs: opts.timeoutMs ?? 5 * 60_000,
+        }),
+        new Promise<never>((_, reject) => setTimeout(() => reject(new Error(`LLM 调用超时（${timeoutMs}ms）`)), timeoutMs)),
+      ]);
+      llmContent = result.content ?? "";
+    } catch (e) {
+      llmError = (e as Error).message;
+    }
+
+    // 4. 诊断日志
+    const logSections = [
+      `# DEVELOP_LOG · ${name}`,
+      ``,
+      `- 时间：${new Date().toISOString()}`,
+      `- 模型：${opts.model}`,
+      `- 状态：${llmError ? `LLM 异常：${llmError}` : "已收到响应"}`,
+      ``,
+      `## System Prompt`,
+      `\`\`\``,
+      systemPrompt,
+      `\`\`\``,
+      ``,
+      `## User Prompt`,
+      `\`\`\``,
+      userPrompt,
+      `\`\`\``,
+      ``,
+      `## LLM 原始响应`,
+      `\`\`\``,
+      llmContent || "（空）",
+      `\`\`\``,
+    ];
+
+    if (llmError) {
+      fs.writeFileSync(logPath, logSections.join("\n"), "utf8");
+      return { ok: false, reason: `LLM 异常：${llmError}`, mainShPath, skeletonBackup, logPath };
+    }
+
+    // 5. 尝试提取 needs_more_permissions 响应
+    const permBlockMatch = llmContent.match(/```json\s*([\s\S]*?)```/);
+    if (permBlockMatch) {
+      try {
+        const parsed = JSON.parse(permBlockMatch[1]!) as {
+          error?: string;
+          requested?: Array<{ capability: string; resource: string; mode: string }>;
+          reason?: string;
+        };
+        if (parsed.error === "needs_more_permissions") {
+          logSections.push(``, `## 结论`, `LLM 声明需要更多权限：${parsed.reason ?? ""}`, ``, `申请项：`, `\`\`\`json`, JSON.stringify(parsed.requested ?? [], null, 2), `\`\`\``);
+          fs.writeFileSync(logPath, logSections.join("\n"), "utf8");
+          return {
+            ok: false,
+            reason: `需要更多权限：${parsed.reason ?? "未说明"}（请追加到 PERMISSION_REQUEST.md 后重新 develop）`,
+            mainShPath, skeletonBackup, logPath,
+            requestedPermissions: parsed.requested ?? [],
+          };
+        }
+      } catch { /* JSON 块不是 needs_more_permissions，继续找 sh 块 */ }
+    }
+
+    // 6. 提取 sh 代码块
+    const shMatch = llmContent.match(/```sh\s*([\s\S]*?)```/);
+    if (!shMatch) {
+      logSections.push(``, `## 结论`, `LLM 响应中未找到 \`\`\`sh 代码块`);
+      fs.writeFileSync(logPath, logSections.join("\n"), "utf8");
+      return {
+        ok: false, reason: "LLM 响应中未找到 ```sh 代码块（详见 DEVELOP_LOG.md）",
+        mainShPath, skeletonBackup, logPath,
+      };
+    }
+    const newCode = shMatch[1]!.trim() + "\n";
+    if (!newCode.startsWith("#!")) {
+      logSections.push(``, `## 结论`, `提取的代码块缺 shebang（#! 开头）`);
+      fs.writeFileSync(logPath, logSections.join("\n"), "utf8");
+      return {
+        ok: false, reason: "提取的 main.sh 缺 #! shebang",
+        mainShPath, skeletonBackup, logPath,
+      };
+    }
+
+    // 7. 写回 main.sh
+    fs.writeFileSync(mainShPath, newCode, "utf8");
+    fs.chmodSync(mainShPath, 0o755);
+    logSections.push(``, `## 提取的 main.sh`, `\`\`\`sh`, newCode, `\`\`\``, ``, `## 结论`, `✓ 已写回 main.sh（原骨架备份于 main.sh.skeleton）。请审阅后 \`factory approve ${name}\`。`);
+    fs.writeFileSync(logPath, logSections.join("\n"), "utf8");
+
+    return { ok: true, mainShPath, skeletonBackup, logPath };
   }
 }
 

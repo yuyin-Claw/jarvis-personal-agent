@@ -214,3 +214,143 @@ describe("Factory 安全审查 / 沙箱测试 / 完整流水线（PLAN Step 4.3 
     expect(factory.listDrafts()).toHaveLength(1);
   });
 });
+
+describe("Factory develop（PLAN Step 4.3 · LLM 生成真实实现）", () => {
+  function makeSkeleton(name: string) {
+    const dir = path.join(tmp, "staging", name);
+    fs.mkdirSync(dir, { recursive: true });
+    fs.writeFileSync(path.join(dir, "skill.json"), JSON.stringify({
+      name, version: "0.1.0", description: `测试 ${name}`,
+      entry: { command: "./main.sh" },
+      input: { type: "object" },
+      output: { type: "object" },
+      smoke: { input: {}, expect: { ok: true, implemented: true } },
+      permissions: [{ capability: "network", resource: "wttr.in:80", mode: "connect" }],
+    }, null, 2));
+    const skeleton = `#!/bin/sh\ncat > /dev/null\nprintf '%s\\n' '{"ok":true,"implemented":false,"result":{}}'\n`;
+    fs.writeFileSync(path.join(dir, "main.sh"), skeleton);
+    fs.chmodSync(path.join(dir, "main.sh"), 0o755);
+    fs.writeFileSync(path.join(dir, "PERMISSION_REQUEST.md"), "# 权限申请单\n");
+    return { dir, skeleton };
+  }
+
+  const realImpl = `#!/bin/sh\ncat > /dev/null\nprintf '%s\\n' '{"ok":true,"implemented":true,"result":{"speech":"晴"}}'\n`;
+
+  it("成功：LLM 返回 sh 块 → 写回 main.sh + 备份骨架 + 落日志", async () => {
+    makeSkeleton("weather-briefing");
+    const r = await factory.develop("weather-briefing", {
+      model: "glm-test",
+      generate: async () => ({ content: `好的，这是实现：\n\`\`\`sh\n${realImpl}\`\`\`\n` }),
+    });
+    expect(r.ok).toBe(true);
+    const written = fs.readFileSync(r.mainShPath, "utf8");
+    expect(written).toContain("implemented\":true");
+    // 骨架备份保留
+    const backup = fs.readFileSync(r.skeletonBackup, "utf8");
+    expect(backup).toContain("implemented\":false");
+    // 日志存在
+    expect(fs.existsSync(r.logPath)).toBe(true);
+    const log = fs.readFileSync(r.logPath, "utf8");
+    expect(log).toContain("System Prompt");
+    expect(log).toContain("提取的 main.sh");
+  });
+
+  it("PERMISSION_REQUEST.md 不被修改（红线）", async () => {
+    makeSkeleton("weather-briefing");
+    const before = fs.readFileSync(path.join(tmp, "staging", "weather-briefing", "PERMISSION_REQUEST.md"), "utf8");
+    await factory.develop("weather-briefing", {
+      model: "glm-test",
+      generate: async () => ({ content: `\`\`\`sh\n${realImpl}\`\`\`\n` }),
+    });
+    const after = fs.readFileSync(path.join(tmp, "staging", "weather-briefing", "PERMISSION_REQUEST.md"), "utf8");
+    expect(after).toBe(before);
+  });
+
+  it("skill.json 的 permissions 不被修改（红线）", async () => {
+    makeSkeleton("weather-briefing");
+    const before = fs.readFileSync(path.join(tmp, "staging", "weather-briefing", "skill.json"), "utf8");
+    await factory.develop("weather-briefing", {
+      model: "glm-test",
+      generate: async () => ({ content: `\`\`\`sh\n${realImpl}\`\`\`\n` }),
+    });
+    const after = fs.readFileSync(path.join(tmp, "staging", "weather-briefing", "skill.json"), "utf8");
+    expect(after).toBe(before);
+  });
+
+  it("LLM 声明需要更多权限 → 不写 main.sh + 返回 requestedPermissions", async () => {
+    makeSkeleton("weather-briefing");
+    const needPerm = {
+      error: "needs_more_permissions",
+      requested: [{ capability: "fs_read", resource: "~/.cache/jarvis", mode: "read" }],
+      reason: "需要读取缓存目录",
+    };
+    const r = await factory.develop("weather-briefing", {
+      model: "glm-test",
+      generate: async () => ({ content: `\`\`\`json\n${JSON.stringify(needPerm)}\n\`\`\`\n` }),
+    });
+    expect(r.ok).toBe(false);
+    expect(r.reason).toMatch(/需要更多权限/);
+    expect(r.requestedPermissions).toHaveLength(1);
+    expect(r.requestedPermissions?.[0].capability).toBe("fs_read");
+    // main.sh 未被改写（仍是骨架）
+    const main = fs.readFileSync(r.mainShPath, "utf8");
+    expect(main).toContain("implemented\":false");
+  });
+
+  it("LLM 异常 → main.sh 不变 + ok=false", async () => {
+    const { skeleton } = makeSkeleton("weather-briefing");
+    const r = await factory.develop("weather-briefing", {
+      model: "glm-test",
+      generate: async () => { throw new Error("API 限流"); },
+    });
+    expect(r.ok).toBe(false);
+    expect(r.reason).toMatch(/LLM 异常.*API 限流/);
+    const main = fs.readFileSync(r.mainShPath, "utf8");
+    expect(main).toBe(skeleton);
+  });
+
+  it("响应无 sh 块 → 报错", async () => {
+    makeSkeleton("weather-briefing");
+    const r = await factory.develop("weather-briefing", {
+      model: "glm-test",
+      generate: async () => ({ content: "我无法实现这个能力。" }),
+    });
+    expect(r.ok).toBe(false);
+    expect(r.reason).toMatch(/未找到.*sh 代码块/);
+  });
+
+  it("响应 sh 块缺 shebang → 报错", async () => {
+    makeSkeleton("weather-briefing");
+    const r = await factory.develop("weather-briefing", {
+      model: "glm-test",
+      generate: async () => ({ content: `\`\`\`sh\necho hello\n\`\`\`\n` }),
+    });
+    expect(r.ok).toBe(false);
+    expect(r.reason).toMatch(/shebang/);
+  });
+
+  it("staging 无骨架 → 报错", async () => {
+    const r = await factory.develop("nonexistent", {
+      model: "glm-test",
+      generate: async () => ({ content: "" }),
+    });
+    expect(r.ok).toBe(false);
+    expect(r.reason).toMatch(/staging 中无此骨架/);
+  });
+
+  it("skeleton 备份幂等：二次 develop 不覆盖已有备份", async () => {
+    const { skeleton } = makeSkeleton("weather-briefing");
+    // 第一次 develop：备份骨架
+    await factory.develop("weather-briefing", {
+      model: "glm-test",
+      generate: async () => ({ content: `\`\`\`sh\n${realImpl}\`\`\`\n` }),
+    });
+    // 第二次 develop：main.sh 已是真实实现，但 skeleton 备份应保持原骨架
+    await factory.develop("weather-briefing", {
+      model: "glm-test",
+      generate: async () => ({ content: `\`\`\`sh\n${realImpl}\`\`\`\n` }),
+    });
+    const backup = fs.readFileSync(path.join(tmp, "staging", "weather-briefing", "main.sh.skeleton"), "utf8");
+    expect(backup).toBe(skeleton);
+  });
+});

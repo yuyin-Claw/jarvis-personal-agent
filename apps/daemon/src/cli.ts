@@ -231,6 +231,47 @@ async function main(): Promise<void> {
         }
       } else if (sub === "reject" && args[2]) {
         console.log(factory.reject(args[2]) ? `已删除骨架：${args[2]}` : `staging 无此骨架：${args[2]}`);
+      } else if (sub === "develop" && args[2]) {
+        // PLAN Step 4.3 develop：调度 LLM 把骨架改写为真实实现
+        // 需要 LLM key（其他 factory 子命令不需要）
+        const config = loadConfig();
+        const gateway = new LLMGateway();
+        gateway.register(new OpenAICompatibleProvider({
+          id: "zhipu",
+          baseUrl: config.baseUrl,
+          apiKey: config.apiKey,
+          models: [{ id: config.model, provider: "zhipu", vision: true }],
+        }));
+        console.log(`〔develop ${args[2]}〕调度 ${config.model} 生成真实实现（最长 5 分钟）...`);
+        const r = await factory.develop(args[2], {
+          model: config.model,
+          generate: async (req) => {
+            const resp = await gateway.generate({
+              model: req.model,
+              messages: req.messages.map((m) => ({ role: m.role, content: m.content })),
+              temperature: req.temperature,
+              timeoutMs: req.timeoutMs,
+            });
+            return { content: resp.content };
+          },
+        });
+        if (r.ok) {
+          console.log(`✓ 已生成真实实现：${r.mainShPath}`);
+          console.log(`  骨架备份：${r.skeletonBackup}`);
+          console.log(`  诊断日志：${r.logPath}`);
+          console.log(`\n下一步：`);
+          console.log(`  1. 审阅 main.sh（对照 main.sh.skeleton）`);
+          console.log(`  2. 更新 skill.json 的 description 与 smoke.expect.implemented=true`);
+          console.log(`  3. jarvis factory approve ${args[2]}`);
+        } else {
+          console.error(`✗ develop 失败：${r.reason}`);
+          if (r.requestedPermissions && r.requestedPermissions.length > 0) {
+            console.error(`\nLLM 申请以下权限（请追加到 PERMISSION_REQUEST.md 与 skill.json.permissions 后重新 develop）：`);
+            console.error(JSON.stringify(r.requestedPermissions, null, 2));
+          }
+          console.error(`诊断日志：${r.logPath}`);
+          process.exit(1);
+        }
       } else if (sub === "review" && args[2]) {
         // 独立安全审查（不注册）：调试骨架用
         const sr = factory.securityReview(args[2]);
@@ -247,7 +288,7 @@ async function main(): Promise<void> {
         if (st.ok) console.log(`✓ 沙箱测试通过`);
         else { console.error(`✗ 沙箱测试失败：${st.reason}`); process.exit(1); }
       } else {
-        console.error("用法：jarvis factory [list | draft \"<需求>\" <名> | approve <名> | reject <名> | review <名> | test <名>]");
+        console.error("用法：jarvis factory [list | draft \"<需求>\" <名> | develop <名> | approve <名> | reject <名> | review <名> | test <名>]");
         process.exit(1);
       }
     } finally {
