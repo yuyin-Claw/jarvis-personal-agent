@@ -211,7 +211,7 @@ export async function createGuestBridge(opts = {}) {
       const job = id ? proxyJobs.get(id) : undefined;
       res.writeHead(200, { "content-type": "text/plain" });
       res.end(job
-        ? `node ${proxyScript} http://${GATEWAY_IP}:${port} ${id} ${job.method} '${job.path}' ${proxyTarget}`
+        ? `node ${proxyScript} http://${GATEWAY_IP}:${port} ${id} ${job.method} '${job.path}' ${job.target ?? proxyTarget}`
         : "");
       return;
     }
@@ -268,7 +268,10 @@ export async function createGuestBridge(opts = {}) {
       });
       return;
     }
-    // 其余路径一律透传给 guest 内的 HTTP 服务（同一份语音服务契约）
+    // 其余路径一律透传给 guest 内的 HTTP 服务（按路径前缀分发到不同端口）
+    // /ui/* → UI Host（8788）；其余 → voice-service（8787）
+    const targetPort = req.url?.startsWith("/ui") ? 8788 : 8787;
+    const targetBase = `http://127.0.0.1:${targetPort}`;
     const id = String(++proxySeq);
     const chunks = [];
     req.on("data", (c) => { chunks.push(c); });
@@ -279,7 +282,7 @@ export async function createGuestBridge(opts = {}) {
         res.end(JSON.stringify({ ok: false, error: "guest 代理超时" }));
       }, 90_000);
       const done = new Promise((resolve) => {
-        proxyJobs.set(id, { method: req.method, path: req.url, body: Buffer.concat(chunks), resolve, timer });
+        proxyJobs.set(id, { method: req.method, path: req.url, body: Buffer.concat(chunks), resolve, timer, target: targetBase });
       });
       proxyQueue.push(id);
       done.then((r) => {

@@ -648,6 +648,39 @@ async function main(): Promise<void> {
       }
       return;
     }
+    if (d.type === "invoke_ui" && d.ui) {
+      // FR-12 Dynamic UI Host：生成交互界面（设置/任务列表/确认/进度条）
+      // 通过 bridge server 透传到 guest 内的 UI Host（/ui/* → 8788）
+      try {
+        const bridgePort = process.env.JARVIS_BRIDGE_PORT ?? "9222";
+        const res = await fetch(`http://localhost:${bridgePort}/ui/render`, {
+          method: "POST",
+          headers: { "content-type": "application/json" },
+          body: JSON.stringify({
+            type: d.ui.type,
+            title: d.ui.title,
+            data: d.ui.data ?? {},
+            actions: d.ui.actions ?? [{ id: "ok", label: "确定" }],
+          }),
+        });
+        const r = await res.json() as { ok?: boolean; windowId?: string; error?: string };
+        if (r.ok) {
+          console.log(`〔已弹出窗口：${d.ui.title}〕（windowId=${r.windowId}）`);
+          if (d.text) console.log(d.text);
+          memory.appendMessage(conversationId, "user", text);
+          memory.appendMessage(conversationId, "assistant", d.text || `已弹出窗口：${d.ui.title}`);
+        } else {
+          console.log(`〔窗口弹出失败：${r.error ?? "未知错误"}〕`);
+          console.log(d.text);
+          memory.appendMessage(conversationId, "assistant", d.text);
+        }
+      } catch (e) {
+        console.log(`〔UI Host 不可用：${(e as Error).message}〕`);
+        console.log(d.text);
+        memory.appendMessage(conversationId, "assistant", d.text);
+      }
+      return;
+    }
     if (d.type === "capability_gap" && d.gap) {
       // 能力缺口：自动生成骨架（staging，零权限、不注册），等用户审批
       console.log(`〔我还不会这件事——已生成能力骨架，等你批准后开发〕`);

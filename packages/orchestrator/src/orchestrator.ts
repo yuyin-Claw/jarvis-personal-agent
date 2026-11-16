@@ -17,6 +17,7 @@ export type DecisionType =
   | "create_task" // 创建任务委派 Harness（0.1 尚无 Harness 时也可建任务挂起）
   | "continue_task" // 继续既有任务
   | "invoke_capability" // 调用已注册能力（能力清单可完成时优先执行）
+  | "invoke_ui" // 生成交互界面（FR-12 Dynamic UI Host：设置/任务列表/确认/进度条）
   | "capability_gap"; // 能力缺口：用户诉求超出已注册能力（ADR-011 0.4 分支）
 
 export interface Decision {
@@ -33,6 +34,17 @@ export interface Decision {
     name: string;
     /** 传给能力的参数（JSON 对象） */
     args?: Record<string, unknown>;
+  };
+  /** invoke_ui 时：界面类型与数据 */
+  ui?: {
+    /** 界面类型：settings / task_list / confirm / progress / custom */
+    type: string;
+    /** 窗口标题 */
+    title: string;
+    /** 界面数据（JSON 对象） */
+    data?: Record<string, unknown>;
+    /** 操作按钮（默认 [{"id":"ok","label":"确定"}]） */
+    actions?: Array<{ id: string; label: string }>;
   };
   /** capability_gap 时：缺口报告（供审批与 Factory 开发依据） */
   gap?: {
@@ -103,6 +115,7 @@ ${openList}
 {"type":"create_task","text":"...","task":{"title":"...","goal":"...","requiresApproval":false}} — 委派开发/执行类工作
 {"type":"continue_task","text":"...","taskId":"..."}  — 用户想继续上述进行中任务之一
 {"type":"invoke_capability","text":"（调用前的简短说明，一句话）","invoke":{"name":"能力清单中的名字","args":{...}}} — 用户诉求能被已注册能力清单中的某个能力直接完成时，**必须优先**选此类型并指定该能力
+{"type":"invoke_ui","text":"（弹出窗口的简短说明，一句话）","ui":{"type":"settings|task_list|confirm|progress","title":"窗口标题","data":{...},"actions":[{"id":"ok","label":"确定"}]}} — 用户需要交互界面时（设置/查看任务/确认操作/查看进度）
 {"type":"capability_gap","text":"...","gap":{"need":"...","suggestedKind":"skill","suggestedName":"kebab-case-name"}} — 用户要求一个具体动作，但已注册能力清单完全覆盖不了（需先经用户批准再开发）
 
 判断规则：
@@ -111,6 +124,7 @@ ${openList}
 - 长期记忆中有能回答用户问题的内容时，在 text 中使用它
 - 用户说"这个/刚才那个文件"等指代时，可结合环境上下文推断
 - 重要：已注册能力清单中的能力若标注「已实现」或「可直接调用」，且与用户诉求匹配，**必须**用 invoke_capability 而不是 capability_gap——能力已经存在，不要说"我还不会"
+- invoke_ui 用于「需要用户交互的界面」：用户说"打开设置"/"看看我的任务"/"确认一下"/"进度怎么样"时，用 invoke_ui 弹出对应窗口（settings/task_list/confirm/progress）
 - capability_gap 仅用于「可复用的运行时能力」诉求：换壁纸/清理缓存/定时提醒/查天气这类"以后还会再做"的系统动作，且已注册能力清单（若有）完全无法完成；纯问答永远 answer
 - 注意区分：写代码/改代码/建工程等开发工作 → create_task（委派 Harness）；只有"让 JARVIS 本身学会一个可重复执行的系统动作"才是 capability_gap
 - text 字段始终是面向用户的话（中文）`;
@@ -259,6 +273,22 @@ export class Orchestrator {
             type: "invoke_capability",
             text: String(obj.text ?? ""),
             invoke: { name: String(inv.name), args: inv.args ?? {} },
+          };
+        }
+        case "invoke_ui": {
+          const ui = (obj as { ui?: { type?: string; title?: string; data?: Record<string, unknown>; actions?: Array<{ id: string; label: string }> } }).ui;
+          if (!ui?.type) {
+            return { type: "answer", text: String(obj.text ?? "") };
+          }
+          return {
+            type: "invoke_ui",
+            text: String(obj.text ?? ""),
+            ui: {
+              type: String(ui.type),
+              title: String(ui.title ?? "JARVIS"),
+              data: ui.data ?? {},
+              actions: ui.actions ?? [{ id: "ok", label: "确定" }],
+            },
           };
         }
         case "capability_gap": {
