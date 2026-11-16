@@ -157,6 +157,12 @@ export async function createGuestBridge(opts = {}) {
   const log = opts.quiet ? () => {} : (...a) => console.log(...a);
   // 反向 HTTP 代理：host → (轮询命令) → guest → guest 内服务 → 结果回传
   const proxyJobs = new Map();
+  // ---- 注册令牌制（通道根治）：agent 必须 /register 拿 token，
+  // /cmd 与 /out 仅对合法 token 出队/接收。旧代理（无 token 的 curl 残留）
+  // 永远拿到 204 空响应，自然淘汰——根治「旧代理抢命令」。
+  let agentToken = null; // 当前合法 agent 的令牌（单 agent 原则）
+  const crypto = await import("node:crypto");
+
   const proxyQueue = [];
   let proxySeq = 0;
   const proxyTarget = opts.proxyTarget ?? "http://127.0.0.1:8787";
@@ -169,7 +175,24 @@ export async function createGuestBridge(opts = {}) {
       res.end(bootstrapScript(`http://${GATEWAY_IP}:${port}`));
       return;
     }
-    if (req.url === "/cmd") {
+    if (req.url?.startsWith("/register")) {
+      // agent 注册：签发令牌（后注册的顶掉前面的——配合 flock 单实例）
+      const token = crypto.randomBytes(12).toString("hex");
+      agentToken = token;
+      if (process.env.JARVIS_BRIDGE_DEBUG) console.log("[bridge] agent 注册 token=", token.slice(0, 8));
+      res.writeHead(200, { "content-type": "application/json" });
+      res.end(JSON.stringify({ ok: true, token, proto: 3 }));
+      return;
+    }
+    if (req.url?.startsWith("/cmd")) {
+      // 令牌门：未注册的请求（旧代理/探测）返回 204 空——不出队、不消耗命令
+      const url = new URL(req.url, "http://x");
+      const tok = url.searchParams.get("token");
+      // 未注册（server 刚起 token 表为空）或 token 不匹配：一律 204 空。
+      // agent 收到空会触发重注册；旧代理（无 token）永远拿不到命令。
+      if (!agentToken || tok !== agentToken) {
+        res.writeHead(204); res.end(); return;
+      }
       // 旧格式迁移命令优先（供磁盘持久化的旧协议代理执行）
       if (legacyQueue.length) {
         res.writeHead(200, { "content-type": "text/plain" });
@@ -212,7 +235,12 @@ export async function createGuestBridge(opts = {}) {
       });
       return;
     }
-    if (req.url === "/out" && req.method === "POST") {
+    if (req.url?.startsWith("/out") && req.method === "POST") {
+      // 令牌门（/out?token=xxx）：未注册的回传直接丢弃
+      const url = new URL(req.url, "http://x");
+      if (!agentToken || url.searchParams.get("token") !== agentToken) {
+        res.writeHead(204); res.end(); return;
+      }
       let body = "";
       req.on("data", (c) => { body += c; });
       req.on("end", () => {
