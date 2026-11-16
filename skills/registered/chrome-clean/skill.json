@@ -1,7 +1,7 @@
 {
   "name": "chrome-clean",
   "version": "0.1.0",
-  "description": "（Factory 骨架，待实现）清理浏览器缓存",
+  "description": "浏览器缓存清理：Chrome / Chromium（mac + Linux）的 HTTP 缓存 / Code Cache / GPUCache / Service Worker，dry-run 默认；真删需 confirm:true + fs_delete 权限",
   "entry": {
     "command": "./main.sh"
   },
@@ -10,33 +10,59 @@
     "properties": {
       "args": {
         "type": "object",
-        "description": "能力参数"
+        "properties": {
+          "dryRun": { "type": "boolean", "description": "默认 true；false 才真删" },
+          "confirm": { "type": "boolean", "description": "真删必须为 true（高危操作二次确认）" },
+          "targets": { "type": "array", "items": { "type": "string" }, "description": "限定浏览器（chrome-mac / chromium-mac / chrome-linux / chromium-linux）" },
+          "minSizeMB": { "type": "number", "description": "小于该大小的目录跳过（默认 1MB）" }
+        }
       }
     }
   },
   "output": {
     "type": "object",
     "properties": {
-      "ok": {
-        "type": "boolean"
-      },
-      "implemented": {
-        "type": "boolean",
-        "description": "骨架恒 false；实现后置 true"
-      },
+      "ok": { "type": "boolean" },
+      "implemented": { "type": "boolean" },
       "result": {
-        "type": "object"
+        "type": "object",
+        "properties": {
+          "dryRun": { "type": "boolean" },
+          "scannedAt": { "type": "string" },
+          "targets": {
+            "type": "array",
+            "items": {
+              "type": "object",
+              "properties": {
+                "browser": { "type": "string" },
+                "path": { "type": "string" },
+                "sizeMB": { "type": "number" },
+                "fileCount": { "type": "number" },
+                "deleted": { "type": "boolean" },
+                "skipped": { "type": "string" }
+              }
+            }
+          },
+          "totalSizeMB": { "type": "number" },
+          "totalFiles": { "type": "number" },
+          "deletedCount": { "type": "number" },
+          "speech": { "type": "string" }
+        }
       }
     }
   },
   "smoke": {
-    "input": {
-      "args": {}
-    },
-    "expect": {
-      "ok": true,
-      "implemented": false
-    }
+    "input": { "args": { "dryRun": true } },
+    "expect": { "ok": true, "implemented": true }
   },
-  "permissions": []
+  "permissions": [
+    { "capability": "fs_read", "resource": "~/Library/Caches/Google/Chrome", "mode": "read" },
+    { "capability": "fs_delete", "resource": "~/Library/Caches/Google/Chrome", "mode": "delete" },
+    { "capability": "fs_read", "resource": "~/Library/Caches/Chromium", "mode": "read" },
+    { "capability": "fs_delete", "resource": "~/Library/Caches/Chromium", "mode": "delete" },
+    { "capability": "fs_read", "resource": "~/.cache/google-chrome", "mode": "read" },
+    { "capability": "fs_delete", "resource": "~/.cache/google-chrome", "mode": "delete" },
+    { "capability": "fs_read", "resource": "~/.cache/chromium", "mode": "read" },
+    { "capability": "fs_delete", "resource": "~/.cache/chromium", "mode": "delete" }
+  ]
 }
