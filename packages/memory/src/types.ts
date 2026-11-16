@@ -85,6 +85,8 @@ export interface MemoryEngine {
   remember(candidate: MemoryCandidate): MemoryRecord | null;
   /** 词法检索 */
   search(query: string, opts?: { kind?: MemoryKind; limit?: number }): MemorySearchHit[];
+  /** 可选语义混合检索（实现不支持时 Gateway 回退 search） */
+  semanticSearch?(query: string, opts?: { kind?: MemoryKind; limit?: number }): Promise<MemorySearchHit[]>;
   /** 按 id 取 */
   get(id: string): MemoryRecord | undefined;
   /** 用户纠正/编辑 */

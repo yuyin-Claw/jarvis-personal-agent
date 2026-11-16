@@ -5,6 +5,7 @@
  * 检索：词法打分（token 重叠 + 长度惩罚），0.1 规模下足够（ADR-006 同源思路）
  */
 import Database from "better-sqlite3";
+import { cosineSimilarity, type EmbeddingProvider } from "./embedding.js";
 import { runMigrations, type Migration } from "./migrations.js";
 import { ALL_MIGRATIONS } from "./schema.js";
 import type {
@@ -60,6 +61,8 @@ export interface SqliteMemoryOptions {
   importanceThreshold?: number;
   /** 去重相似阈值（0-1，默认 0.9 视为重复） */
   duplicateThreshold?: number;
+  /** 可选语义向量 Provider；缺省时 semanticSearch 自动降级词法检索 */
+  embedding?: EmbeddingProvider;
 }
 
 function tokenize(text: string): string[] {
@@ -131,6 +134,7 @@ export class SqliteMemoryEngine implements MemoryEngine {
   private readonly importance: ImportanceEvaluator;
   private readonly threshold: number;
   private readonly dupThreshold: number;
+  private readonly embedding?: EmbeddingProvider;
 
   constructor(opts: SqliteMemoryOptions) {
     this.db = new Database(opts.path);
@@ -140,6 +144,7 @@ export class SqliteMemoryEngine implements MemoryEngine {
     this.importance = opts.importance ?? new RuleBasedImportance();
     this.threshold = opts.importanceThreshold ?? 0.5;
     this.dupThreshold = opts.duplicateThreshold ?? 0.9;
+    this.embedding = opts.embedding;
   }
 
   migrate(): void {
@@ -217,6 +222,108 @@ export class SqliteMemoryEngine implements MemoryEngine {
     return hits.slice(0, opts?.limit ?? 10);
   }
 
+  /** 蒸馏/发送给 LLM 前的本地隐私检查。 */
+  allowsContent(content: string): boolean {
+    return this.privacy.check({ kind: "conversation_summary", content, source: "conversation" }) === null;
+  }
+
+  /** 写入并建立语义索引；向量服务故障时保留记忆并降级词法检索。 */
+  async rememberSemantic(candidate: MemoryCandidate): Promise<MemoryRecord | null> {
+    const record = this.remember(candidate);
+    if (record && this.embedding) {
+      try {
+        await this.indexRecords([record]);
+      } catch {
+        // 记忆本体已安全落库；余额不足/网络故障不得导致蒸馏失败或丢记忆。
+      }
+    }
+    return record;
+  }
+
+  /** 为既有记忆批量补建/重建向量（返回成功条数）。 */
+  async reindexAll(): Promise<number> {
+    if (!this.embedding) return 0;
+    const records = this.list();
+    let indexed = 0;
+    for (let i = 0; i < records.length; i += 32) {
+      await this.indexRecords(records.slice(i, i + 32));
+      indexed += Math.min(32, records.length - i);
+    }
+    return indexed;
+  }
+
+  private async indexRecords(records: MemoryRecord[]): Promise<void> {
+    if (!this.embedding || records.length === 0) return;
+    const vectors = await this.embedding.embed(records.map((r) => r.content));
+    const now = new Date().toISOString();
+    const stmt = this.db.prepare(`INSERT INTO memory_embeddings (memory_id, model, dimensions, vector, updated_at)
+      VALUES (?,?,?,?,?) ON CONFLICT(memory_id) DO UPDATE SET
+      model=excluded.model, dimensions=excluded.dimensions, vector=excluded.vector, updated_at=excluded.updated_at`);
+    for (let i = 0; i < records.length; i++) {
+      const vector = vectors[i];
+      if (!vector) throw new Error(`Embedding 缺失：${records[i]!.id}`);
+      stmt.run(records[i]!.id, this.embedding.model, vector.length, JSON.stringify(vector), now);
+    }
+  }
+
+  /** 语义 + 词法混合检索；无 provider 或尚无向量时回退词法。 */
+  async semanticSearch(
+    query: string,
+    opts: { kind?: MemoryRecord["kind"]; limit?: number } = {},
+  ): Promise<MemorySearchHit[]> {
+    if (!this.embedding) return this.search(query, opts);
+    let queryVector: number[] | undefined;
+    try {
+      [queryVector] = await this.embedding.embed([query]);
+    } catch {
+      // embedding 服务不可用（限流/余额/网络）时保持可用性，降级词法。
+      return this.search(query, opts);
+    }
+    if (!queryVector) return this.search(query, opts);
+
+    const rows = (
+      opts.kind
+        ? this.db.prepare("SELECT m.*, e.vector FROM memories m JOIN memory_embeddings e ON m.id=e.memory_id WHERE m.kind=?").all(opts.kind)
+        : this.db.prepare("SELECT m.*, e.vector FROM memories m JOIN memory_embeddings e ON m.id=e.memory_id").all()
+    ) as Array<Record<string, unknown>>;
+    if (rows.length === 0) return this.search(query, opts);
+
+    const limit = opts.limit ?? 10;
+    const lexical = this.search(query, { kind: opts.kind, limit: Math.max(50, limit * 5) });
+    const scores = new Map<string, { record: MemoryRecord; semantic: number; lexical: number }>();
+    for (const row of rows) {
+      const vector = JSON.parse(row.vector as string) as number[];
+      scores.set(row.id as string, {
+        record: rowToMemory(row),
+        semantic: Math.max(0, cosineSimilarity(queryVector, vector)),
+        lexical: 0,
+      });
+    }
+    for (const hit of lexical) {
+      const current = scores.get(hit.record.id) ?? { record: hit.record, semantic: 0, lexical: 0 };
+      current.lexical = hit.score;
+      scores.set(hit.record.id, current);
+    }
+    return [...scores.values()]
+      .map((v) => ({ record: v.record, score: Math.min(1, v.semantic * 0.75 + v.lexical * 0.25) }))
+      .filter((v) => v.score > 0.05)
+      .sort((a, b) => b.score - a.score)
+      .slice(0, limit);
+  }
+
+  getDistilledMessageId(conversationId: string): string | undefined {
+    const row = this.db.prepare("SELECT last_message_id FROM memory_distillations WHERE conversation_id=?")
+      .get(conversationId) as { last_message_id?: string } | undefined;
+    return row?.last_message_id;
+  }
+
+  markDistilled(conversationId: string, messageId: string): void {
+    this.db.prepare(`INSERT INTO memory_distillations (conversation_id, last_message_id, created_at)
+      VALUES (?,?,?) ON CONFLICT(conversation_id) DO UPDATE SET
+      last_message_id=excluded.last_message_id, created_at=excluded.created_at`)
+      .run(conversationId, messageId, new Date().toISOString());
+  }
+
   get(id: string): MemoryRecord | undefined {
     const row = this.db.prepare("SELECT * FROM memories WHERE id = ?").get(id) as
       | Record<string, unknown>
@@ -229,6 +336,8 @@ export class SqliteMemoryEngine implements MemoryEngine {
       .prepare("UPDATE memories SET content = ?, updated_at = ? WHERE id = ?")
       .run(content, new Date().toISOString(), id);
     if (res.changes === 0) return undefined;
+    // 内容已变，旧向量不得继续参与检索；由 reindexAll/rememberSemantic 重建。
+    this.db.prepare("DELETE FROM memory_embeddings WHERE memory_id = ?").run(id);
     return this.get(id);
   }
 

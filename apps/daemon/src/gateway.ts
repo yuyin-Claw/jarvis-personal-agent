@@ -59,8 +59,10 @@ export class ConversationGateway {
    * Gateway 负责消息路由与上下文加载，不做决策（决策归 Orchestrator）。
    */
   async receive(input: UserInput, handlers: ConversationHandlers = {}): Promise<TurnResult> {
-    // 1. 检索相关记忆（检索注入，硬预算：topK 条）
-    const hits = this.memory.search(input.text, { limit: this.memoryTopK });
+    // 1. 检索相关记忆（语义混合优先，词法兜底，硬预算：topK 条）
+    const hits = this.memory.semanticSearch
+      ? await this.memory.semanticSearch(input.text, { limit: this.memoryTopK })
+      : this.memory.search(input.text, { limit: this.memoryTopK });
     handlers.onMemoryInjected?.(
       hits.map((h) => ({ id: h.record.id, content: h.record.content, score: h.score })),
     );

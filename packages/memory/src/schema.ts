@@ -66,8 +66,29 @@ export const M_1763140300_AUDIT: Migration = {
   },
 };
 
+/** 0.5：语义向量索引与对话蒸馏水位线 */
+export const M_1763140400_MEMORY_SEMANTIC: Migration = {
+  id: 1763140400,
+  name: "memory_embeddings_distillations",
+  up: (db) => {
+    db.exec(`CREATE TABLE memory_embeddings (
+      memory_id TEXT PRIMARY KEY REFERENCES memories(id) ON DELETE CASCADE,
+      model TEXT NOT NULL,
+      dimensions INTEGER NOT NULL,
+      vector TEXT NOT NULL,
+      updated_at TEXT NOT NULL
+    )`);
+    db.exec(`CREATE TABLE memory_distillations (
+      conversation_id TEXT PRIMARY KEY REFERENCES conversations(id) ON DELETE CASCADE,
+      last_message_id TEXT NOT NULL,
+      created_at TEXT NOT NULL
+    )`);
+  },
+};
+
 export const ALL_MIGRATIONS = [
   M_1763140000_CONVERSATIONS,
   M_1763140100_MEMORIES,
   M_1763140300_AUDIT,
+  M_1763140400_MEMORY_SEMANTIC,
 ];

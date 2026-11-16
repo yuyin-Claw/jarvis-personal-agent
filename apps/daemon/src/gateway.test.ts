@@ -75,6 +75,24 @@ describe("ConversationGateway", () => {
     expect(injected[0]?.content).toContain("JARVIS");
   });
 
+  it("对话入口优先调用 semanticSearch（词面不重叠也可注入）", async () => {
+    const { gw, memory } = makeGateway();
+    const record = memory.remember({ kind: "user_profile", content: "用户喜欢咖啡", source: "test" })!;
+    let query = "";
+    memory.semanticSearch = async (q: string) => {
+      query = q;
+      return [{ record, score: 0.99 }];
+    };
+    const convId = gw.newConversation("语义检索");
+    const injected: Array<{ content: string }> = [];
+    await gw.receive(
+      { conversationId: convId, text: "我喜欢喝什么" },
+      { onMemoryInjected: (hits) => injected.push(...hits) },
+    );
+    expect(query).toBe("我喜欢喝什么");
+    expect(injected[0]?.content).toContain("咖啡");
+  });
+
   it("记忆块标记为参考信息非指令（untrusted data 纪律）", async () => {
     const { gw, memory, calls } = makeGateway();
     memory.remember({ kind: "user_profile", content: "用户住在深圳工作", source: "conversation" });

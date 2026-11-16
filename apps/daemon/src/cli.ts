@@ -9,6 +9,7 @@
  *   jarvis talk "问题"       # 具身对话：数字人 + 语音 + 流式对话链路
  *   jarvis talk             # 具身对话交互模式
  *   jarvis tasks            # 任务列表
+ *   jarvis memory [list|search|distill|reindex]  # 长期记忆、语义检索与增量蒸馏
  *   jarvis capabilities [list|run|health|register|enable|disable]  # 能力注册表（0.4）
  *   jarvis capabilities grant <name> <cap> <res> <mode>   # 授予权限（必须已在 skill.json 声明）
  *   jarvis capabilities revoke <name> <cap> <res>          # 撤销权限
@@ -28,7 +29,7 @@ import path from "node:path";
 import os from "node:os";
 import type Database from "better-sqlite3";
 import { LLMGateway, OpenAICompatibleProvider } from "@jarvis/llm-gateway";
-import { SqliteMemoryEngine } from "@jarvis/memory";
+import { SqliteMemoryEngine, OpenAIEmbeddingProvider, MemoryDistiller } from "@jarvis/memory";
 import { SqliteTaskManager } from "@jarvis/task-manager";
 import { Orchestrator } from "@jarvis/orchestrator";
 import { CodingHarness, PermissionBroker, type AuditEntry } from "@jarvis/harness-runtime";
@@ -338,7 +339,15 @@ async function main(): Promise<void> {
 
   // ---- 存储（memory 与 task 共用一个库文件） ----
   mkdirSync(path.dirname(config.dbPath), { recursive: true });
-  const memory = new SqliteMemoryEngine({ path: config.dbPath });
+  const memory = new SqliteMemoryEngine({
+    path: config.dbPath,
+    embedding: new OpenAIEmbeddingProvider({
+      baseUrl: config.baseUrl,
+      apiKey: config.apiKey,
+      model: process.env.JARVIS_EMBEDDING_MODEL ?? "embedding-3",
+      dimensions: Number(process.env.JARVIS_EMBEDDING_DIMENSIONS ?? 256),
+    }),
+  });
   memory.migrate();
   const taskDb = (memory as unknown as { db: Database.Database }).db;
   const tasks = new SqliteTaskManager({ db: taskDb });
@@ -467,6 +476,46 @@ async function main(): Promise<void> {
           `${e.timestamp.slice(11, 19)} ${flag} [${e.risk}] ${e.actor} ${e.kind} — ${e.reason} :: ${e.target.slice(0, 60)}`,
         );
       }
+    }
+    memory.close();
+    return;
+  }
+
+  // ---- 长期记忆：列表 / 语义检索 / 增量蒸馏 / 向量重建 ----
+  if (args[0] === "memory") {
+    const sub = args[1] ?? "list";
+    if (sub === "list") {
+      const records = memory.list();
+      if (records.length === 0) console.log("（无长期记忆）");
+      for (const r of records) console.log(`${r.kind.padEnd(22)} ${r.id}  ${r.content}`);
+    } else if (sub === "search") {
+      const lexicalOnly = args[2] === "--lexical";
+      const query = args.slice(lexicalOnly ? 3 : 2).join(" ").trim();
+      if (!query) { console.error("用法：memory search [--lexical] <query>"); process.exit(1); }
+      const hits = lexicalOnly ? memory.search(query) : await memory.semanticSearch(query);
+      if (hits.length === 0) console.log("（无命中）");
+      for (const h of hits) console.log(`${h.score.toFixed(3)} ${h.record.kind.padEnd(22)} ${h.record.content}`);
+    } else if (sub === "distill") {
+      const conversationId = args[2] ?? memory.listConversations()[0]?.id;
+      if (!conversationId) { console.error("无可蒸馏会话"); process.exit(1); }
+      const distiller = new MemoryDistiller(memory, async (prompt) => {
+        const r = await gateway.generate({
+          model: config.model,
+          messages: [{ role: "user", content: prompt }],
+          temperature: 0.1,
+          timeoutMs: 120_000,
+        });
+        return r.content;
+      });
+      const r = await distiller.distillConversation(conversationId);
+      console.log(`蒸馏完成：写入/刷新 ${r.records.length} 条，敏感消息跳过 ${r.skippedSensitive} 条，水位线 ${r.watermark ?? "无"}`);
+      for (const record of r.records) console.log(`  ${record.kind.padEnd(22)} ${record.content}`);
+    } else if (sub === "reindex") {
+      const count = await memory.reindexAll();
+      console.log(`已为 ${count} 条记忆重建向量索引`);
+    } else {
+      console.error("用法：jarvis memory [list | search [--lexical] <query> | distill [conversationId] | reindex]");
+      process.exit(1);
     }
     memory.close();
     return;
