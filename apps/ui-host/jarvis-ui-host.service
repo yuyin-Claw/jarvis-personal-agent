@@ -1,0 +1,17 @@
+[Unit]
+Description=JARVIS Dynamic UI Host（按需生成交互界面，FR-12）
+After=network.target graphical-session.target
+
+[Service]
+Type=simple
+WorkingDirectory=%h/.local/share/jarvis/ui-host
+Environment=JARVIS_UI_HOST_PORT=8788
+Environment=WAYLAND_DISPLAY=wayland-0
+ExecStart=/usr/bin/python3 src/server.py
+Restart=on-failure
+RestartSec=2
+StandardOutput=journal
+StandardError=journal
+
+[Install]
+WantedBy=graphical-session.target
