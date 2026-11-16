@@ -22,6 +22,7 @@ import { SqliteMemoryEngine } from "@jarvis/memory";
 import { SqliteTaskManager } from "@jarvis/task-manager";
 import { ContinuousRuntime, findStagnantTasks, type NotifyChannel, type ProactiveNotice } from "@jarvis/runtime";
 import { ContextEngine, type AwarenessSource } from "@jarvis/context-engine";
+import { CapabilityRegistry, SkillRunner } from "@jarvis/capability-registry";
 import { loadConfig } from "./config.js";
 import { initPlatform } from "./platform.js";
 import { createEmbodiedRuntime } from "./embodied.js";
@@ -68,6 +69,15 @@ async function main(): Promise<void> {
   const taskDb = (memory as unknown as { db: Database.Database }).db;
   const tasks = new SqliteTaskManager({ db: taskDb });
   tasks.migrate();
+
+  // ---- 能力注册表（0.4：weather cron 需要调 SkillRunner）----
+  const os = await import("node:os");
+  const capDbPath = process.env.JARVIS_CAP_DB
+    ?? path.join(os.homedir(), ".local/share/jarvis/capabilities.db");
+  const capSkillsRoot = process.env.JARVIS_SKILLS_ROOT
+    ?? path.join(os.homedir(), ".local/share/jarvis/skills");
+  const capRegistry = new CapabilityRegistry({ dbPath: capDbPath, skillsRoot: capSkillsRoot });
+  const skillRunner = new SkillRunner(capSkillsRoot);
 
   // ---- 平台适配 + 具身运行时（ADR-007 / 0.2-④⑤） ----
   const platform = await initPlatform();
@@ -187,8 +197,41 @@ async function main(): Promise<void> {
     },
   });
 
+  // 每日天气播报 cron（0.4 能力闭环：invoke_capability → weather-briefing）
+  // 每 5 分钟检查一次，仅在每天 08:00-08:05 窗口内触发；dedupeKey 含日期保证每日一次
+  rt.schedule({
+    id: "weather-briefing",
+    name: "每日天气播报",
+    intervalMs: 5 * 60_000,
+    run: async () => {
+      const now = new Date();
+      if (now.getHours() !== 8 || now.getMinutes() >= 5) return;
+      const dateKey = now.toISOString().slice(0, 10);
+      const city = process.env.JARVIS_WEATHER_CITY ?? "Shanghai";
+      // 仅在能力已注册且实现时才播报（否则 skip）
+      const rec = capRegistry.findByName("weather-briefing");
+      if (!rec || rec.enabled !== 1) return;
+      try {
+        const result = await skillRunner.run("weather-briefing", { args: { city } });
+        const r = (result.output ?? {}) as { ok?: boolean; implemented?: boolean; result?: { speech?: string }; error?: string };
+        if (r.ok && r.implemented && r.result?.speech) {
+          await rt.notify({
+            text: `早安。${r.result.speech}`,
+            priority: "normal",
+            dedupeKey: `weather:${dateKey}`,
+            at: now.toISOString(),
+          });
+        } else {
+          console.error(`〔weather cron〕能力返回异常：${r.error ?? "implemented=false"}`);
+        }
+      } catch (e) {
+        console.error(`〔weather cron 失败〕${(e as Error).message}`);
+      }
+    },
+  });
+
   console.log(`JARVIS daemon 0.2 · 平台 ${platform.id} · 数据 ${config.dbPath} · 通知 ${notifyFile}`);
-  console.log(`停滞检查 ${checkIntervalMs / 1000}s · 活动采样 120s · 空闲交流 600s · 心跳 30s · Ctrl+C 退出`);
+  console.log(`停滞检查 ${checkIntervalMs / 1000}s · 活动采样 120s · 空闲交流 600s · 心跳 30s · 天气 cron 每日 08:00（城市 ${process.env.JARVIS_WEATHER_CITY ?? "Shanghai"}） · Ctrl+C 退出`);
 
   // 优雅退出
   let stopped = false;
