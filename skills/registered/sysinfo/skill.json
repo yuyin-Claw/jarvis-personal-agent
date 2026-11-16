@@ -1,0 +1,10 @@
+{
+  "name": "sysinfo",
+  "version": "0.1.0",
+  "description": "只读系统信息（uptime/内存/磁盘/负载）——首个参照 Skill，零权限",
+  "entry": { "command": "./main.sh" },
+  "input": { "type": "object", "properties": { "section": { "type": "string", "enum": ["all", "uptime", "mem", "disk", "load"] } } },
+  "output": { "type": "object", "properties": { "uptime": { "type": "string" }, "memAvailableMB": { "type": "number" }, "diskFreeGB": { "type": "number" }, "load1": { "type": "number" } } },
+  "smoke": { "input": { "section": "all" }, "expect": { "ok": true } },
+  "permissions": []
+}

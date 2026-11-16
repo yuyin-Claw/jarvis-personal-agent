@@ -1,0 +1,50 @@
+{
+  "name": "weather-briefing",
+  "version": "0.1.0",
+  "description": "每日天气查询与播报（wttr.in）：温度/天气/风速/湿度/中文播报文本",
+  "entry": {
+    "command": "./main.sh"
+  },
+  "input": {
+    "type": "object",
+    "properties": {
+      "args": {
+        "type": "object",
+        "description": "能力参数"
+      }
+    }
+  },
+  "output": {
+    "type": "object",
+    "properties": {
+      "ok": {
+        "type": "boolean"
+      },
+      "implemented": {
+        "type": "boolean",
+        "description": "骨架恒 false；实现后置 true"
+      },
+      "result": {
+        "type": "object"
+      }
+    }
+  },
+  "smoke": {
+    "input": {
+      "args": {
+        "city": "Shanghai"
+      }
+    },
+    "expect": {
+      "ok": true,
+      "implemented": true
+    }
+  },
+  "permissions": [
+    {
+      "capability": "network",
+      "resource": "wttr.in:80",
+      "mode": "connect"
+    }
+  ]
+}

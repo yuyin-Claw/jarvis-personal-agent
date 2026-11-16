@@ -1,0 +1,42 @@
+{
+  "name": "chrome-clean",
+  "version": "0.1.0",
+  "description": "（Factory 骨架，待实现）清理浏览器缓存",
+  "entry": {
+    "command": "./main.sh"
+  },
+  "input": {
+    "type": "object",
+    "properties": {
+      "args": {
+        "type": "object",
+        "description": "能力参数"
+      }
+    }
+  },
+  "output": {
+    "type": "object",
+    "properties": {
+      "ok": {
+        "type": "boolean"
+      },
+      "implemented": {
+        "type": "boolean",
+        "description": "骨架恒 false；实现后置 true"
+      },
+      "result": {
+        "type": "object"
+      }
+    }
+  },
+  "smoke": {
+    "input": {
+      "args": {}
+    },
+    "expect": {
+      "ok": true,
+      "implemented": false
+    }
+  },
+  "permissions": []
+}
