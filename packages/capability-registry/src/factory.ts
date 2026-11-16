@@ -422,19 +422,28 @@ ${skeletonCode}
     let llmError = "";
     try {
       const timeoutMs = opts.timeoutMs ?? 5 * 60_000;
-      const result = await Promise.race([
-        opts.generate({
-          model: opts.model,
-          messages: [
-            { role: "system", content: systemPrompt },
-            { role: "user", content: userPrompt },
-          ],
-          temperature: 0.2,
-          timeoutMs: opts.timeoutMs ?? 5 * 60_000,
-        }),
-        new Promise<never>((_, reject) => setTimeout(() => reject(new Error(`LLM 调用超时（${timeoutMs}ms）`)), timeoutMs)),
-      ]);
-      llmContent = result.content ?? "";
+      let timeout: ReturnType<typeof setTimeout> | undefined;
+      try {
+        const result = await Promise.race([
+          opts.generate({
+            model: opts.model,
+            messages: [
+              { role: "system", content: systemPrompt },
+              { role: "user", content: userPrompt },
+            ],
+            temperature: 0.2,
+            timeoutMs,
+          }),
+          new Promise<never>((_, reject) => {
+            timeout = setTimeout(() => reject(new Error(`LLM 调用超时（${timeoutMs}ms）`)), timeoutMs);
+          }),
+        ]);
+        llmContent = result.content ?? "";
+      } finally {
+        // Promise.race 不会自动取消另一个分支；成功后必须清理超时定时器，
+        // 否则 CLI 会被空定时器保活满 timeoutMs（实测 develop 成功仍挂 5 分钟）。
+        if (timeout) clearTimeout(timeout);
+      }
     } catch (e) {
       llmError = (e as Error).message;
     }

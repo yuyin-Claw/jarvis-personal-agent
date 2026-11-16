@@ -1,4 +1,4 @@
-import { describe, expect, it, beforeEach, afterEach } from "vitest";
+import { describe, expect, it, beforeEach, afterEach, vi } from "vitest";
 import fs from "node:fs";
 import os from "node:os";
 import path from "node:path";
@@ -336,6 +336,22 @@ describe("Factory develop（PLAN Step 4.3 · LLM 生成真实实现）", () => {
     });
     expect(r.ok).toBe(false);
     expect(r.reason).toMatch(/staging 中无此骨架/);
+  });
+
+  it("develop 完成后清理超时定时器（CLI 不被保活到 timeoutMs）", async () => {
+    makeSkeleton("weather-briefing");
+    const clearSpy = vi.spyOn(globalThis, "clearTimeout");
+    try {
+      const r = await factory.develop("weather-briefing", {
+        model: "glm-test",
+        timeoutMs: 60_000,
+        generate: async () => ({ content: `\`\`\`sh\n${realImpl}\`\`\`\n` }),
+      });
+      expect(r.ok).toBe(true);
+      expect(clearSpy).toHaveBeenCalledTimes(1);
+    } finally {
+      clearSpy.mockRestore();
+    }
   });
 
   it("skeleton 备份幂等：二次 develop 不覆盖已有备份", async () => {
