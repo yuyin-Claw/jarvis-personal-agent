@@ -27,6 +27,9 @@
 | 12 | **语音服务零 macOS 依赖红线（用户裁决 2026-11-15）**：语音服务是架设在 Omarchy 系统里面的组成部分，不是独立项目，不得依赖任何 macOS 内容——MacBackend 已删除（createBackend 拒绝 macos、auto 恒为 omarchy）；测试音频用仓库 fixtures；守卫测试固化该红线 | 2026-11-15 |
 | 13 | **JARVIS 系统栈开机自启动（ADR-010，用户裁决 2026-11-15）**：用户所说「唯一操作入口」含义即开机自启——系统启动数字人就在；JARVIS 栈（jarvis-voice + jarvis-avatar）在 Omarchy 上 systemd --user 开机自启为一个整体（「仅经数字人交互、不设 GUI」的引申表述已更正） | 2026-11-15 |
 | 14 | **0.4 Harness Factory = 能力闭环 MVP（ADR-011，用户裁决 2026-11-15）**：Registry/缺口探测/Factory 流水线（复用 CodingHarness）/沙箱契约测试/安全审查/注册回滚；权限绝不自动授予（申请单唯一路径）；MCP 生成等留 0.5+ | 2026-11-15 |
+| 15 | **数字人脸 v3.1 + 真实 TTS 振幅驱动口型（2026-11-16）**：从全息光球演进为「由粒子组成的人脸」（蛋形轮廓+杏仁眼+M 唇+面部体积点，137→~320 粒子）；振幅来源必须是真实 wav RMS 包络，禁止程序振荡假装在说话——表现层真实反映系统状态是核心原则 | 2026-11-16 |
+| 16 | **Orchestrator 第六分支 invoke_capability（2026-11-16）**：能力闭环最后一环——已注册能力经 SkillRunner 真实执行后由对话直接返回结果；GLM 知道能力存在 ≠ 会调用，必须有显式决策类型 + cli 分发到 SkillRunner，否则只承诺不执行 | 2026-11-16 |
+| 17 | **验证通道根治 = 注册令牌制（2026-11-16）**：旧代理（键盘注入的 curl 残留）靠 pkill 永远清不干净；协议层解法 = server 签发 token + `/cmd` `/out` 严格校验（含 agentToken=null 时一律 204 强制先注册）+ agent flock 单实例 + 空转 5 次自动重注册 | 2026-11-16 |
 
 ## 实施进度（2026-11-15 基准）
 
@@ -55,6 +58,7 @@ JARVIS 0.1 验收三场景：①委派任务自动调度 Harness 完成并汇报
 
 - DeepSeek 端点工具调用（function calling）行为——未实测（非阻塞，GLM 已稳定）
 - XDG ScreenCast Portal 会话恢复与锁屏策略（备忘录 §16 未决项）
+- **真实麦克风人声实测未做**（2026-11-16 起）：live 链路目前仅 fixture 模拟验证（pw-play 把 wav 推到 jarvis-mic.monitor），真人对着物理麦克风说话的端到端链路未测；可能暴露 VAD 阈值对人声音量/环境的适配问题
 
 ## 0.2 基准变更（用户裁决 2026-11-15 凌晨）
 
@@ -110,3 +114,70 @@ JARVIS 0.1 验收三场景：①委派任务自动调度 Harness 完成并汇报
 - 全栈验收 6/6：三 unit active、引擎全本地、fixture ASR、guest 内真实
   GLM 对话、Core 驱动数字人窗口、piper 合成落盘
 - GLM key 经 9p jarvis-core.env 注入 guest（JARVIS_ENV_FILE）
+
+## 2026-11-16 收官段——0.3 / 0.4 / 人脸 v3.1 / 通道根治 / v0.3.0 发版
+
+### 0.3 实时麦克风链路（ADR-012）
+
+- PipeWire `pw-record` 采集 → VAD 能量法分段（20ms 窗口 RMS，≥350 开段、<350 静默累计 800ms 收段、<300ms 丢弃、>30s 截断）→ whisper.cpp 本地转写 → 事件流（speech_start / partial / final / speech_end）
+- **VAD 时长基准必须用音频字节数**（`(endByte-startByte)/rate*1000`）——批量 tick 中 `Date.now()` 几乎不流逝（600ms 音频在一个 tick 处理完，墙钟差≈0 误判 0 时长全丢弃）
+- PipeWire null-sink 持久化：`~/.config/pipewire/pipewire.conf.d/jarvis-mic.conf`——VM 重启自动加载虚拟麦克风，不再每次手动 `pactl load-module`
+- 打断语义：speech_start 立即打断 TTS 并回 listening；partial 到达不误派 tts_end；说完才进 thinking
+- 跨系统验收 verify-omarchy-live.mjs：E2E_LIVE_PASS
+
+### 0.4 Harness Factory 能力闭环（ADR-011）
+
+- Step 4.1 能力注册表 `@jarvis/capability-registry`：skill.json 契约 + capabilities.db
+- Step 4.2 capability_gap 决策分支：用户诉求超出当前能力时产出结构化 gap 描述（不再只回答「我不会」）
+- Step 4.3 Skill 工厂：gap → LLM 生成 Skill 骨架 → staging 待审 → `capabilities approve` 批准 → 注册
+- Step 4.4 运行时集成：daemon 监听 gap 事件 → 自动起工厂 → 审批通知
+- **能力闭环最后一环 invoke_capability**（决策 #16）：Orchestrator 第六分支——已注册能力直接调用，cli 分发 SkillRunner 真实执行 → result.speech 优先输出
+- **关键坑**：skill.json 更新后必须 SQL 同步 capabilities.db 的 description（GLM 读的是注册表 description，不是 skill.json），否则 GLM 看到旧描述「待实现骨架」→ 仍判 gap
+
+### 数字人脸 v2 → v3.1
+
+- v2（318de8e）：粒子拓扑从全息球改为「由光点组成的人脸」——基础轮廓 + 眼 + 唇 + 口型同步
+- v3.1（d70bef5）：蛋形轮廓 + 杏仁眼（上下眼睑 + 眼神光）+ M 形唇峰 + 下颌收拢 + 面部体积填充点；粒子数 137 → ~320
+- **真实 TTS 振幅驱动口型**（eb15af1）：`analyzeAmplitude(wav, sampleRate)` 每 20ms 一帧 RMS / 16384 归一化；`VoiceServiceSpeechOutput.onAmplitude` 回调；`withVoiceService` 自动接线到 `platform.avatarHost.setState({state:'speaking', amplitude:a})`
+- **unit 附着渲染架构前置修复**：omarchy-adapter `start()` 检测已有 socket 则复用而非 spawn 竞争；`setState` 在 socket 存在时即可写（不再依赖 proc），否则 unit 独占渲染时振幅帧会被静默丢弃
+- **口型链路的权威证据是帧序列日志（journalctl grep frame）**，不是像素差分（粒子小、抓帧时机不可靠）
+
+### 验证通道根治（提交 2ece595）
+
+- 三层防护：宿主 server 令牌门 + agent v3 flock 单实例 + 部署脚本清旧 curl 代理
+- **关键设计漏洞修补**：server 重启后 agentToken=null 时也必须拒绝（一律 204 强制先注册），否则旧代理又能抢
+- agent 空转 5 次自动重注册（快于原 IDLE%30），server 重启 ~5s 自愈
+- 实测：5 连发 gexec 全成功；无 token → 204 空淘汰；合法 token → 200 出队
+
+### 十域 25 项冒烟断言脚本化（提交 1d7afd4）
+
+- 域 1 systemd 生产常驻（4 断言）/ 域 2 配置健康（1）/ 域 3 语音引擎（2）/ 域 4 实时语音链路（1）/ 域 5 对话与审批（5）/ 域 6 数字人（3）/ 域 7 能力闭环（4）/ 域 8 通知与状态机（2）/ 域 9 数据层（2）/ 域 10 管道多轮（1）
+- 固化 `scripts/smoke/`（part1/part2 + PipeWire 配置 + README），guest 内可重复执行
+- 揪出并修复 3 个真实问题：live 链路 sink 持久化缺失 / part2 缺 `cd $CORE` / 审批门测试重复路径被 GLM 正确判 continue_task
+
+### 首个真实能力 weather-briefing（提交 056a5a9）
+
+- wttr.in HTTP 只读（format=j1 无需 key）+ 常见天气英中映射（lang_zh 字段常缺失）
+- 仅 network 权限申请单（wttr.in:80），无文件写入、无系统调用
+- **完整链路实测**：用户「上海今天天气怎么样」→ GLM 判 invoke_capability → SkillRunner 真实执行 → 输出「上海现在气温18度，霾，体感16度，风速每小时11公里，湿度55%」
+- ADR-011 能力闭环至此完整：**gap 探测 → 骨架生成 → 用户审批 → 注册 → 对话直调**——JARVIS 现在能自己长出能力并用起来
+
+### v0.3.0 发版（提交 d744a9f + tag v0.3.0）
+
+- 28 commit + 3 tag（v0.2.0 / v0.2.1 / v0.3.0）一次性推送 origin/main
+- PROJECT.md 重写（254 行）盘点至当前真实状态
+- CHANGELOG.md 顶部插入 v0.3.0 段（+119 行）
+- Obsidian 经验库同步 404 → 571 行：README 时间线补完 / 通道页加 v3 段 / 音频页加振幅口型 / 协议页加能力闭环设计 / systemd 页加 bridge-agent unit
+
+### 当前能力盘点（2026-11-16）
+
+- 251 单测全绿 / 十域 25 项冒烟全过 / 12 项对话深测全过
+- 六分支意图完备：answer / ask / create_task / continue_task / capability_gap / invoke_capability
+- 通道：注册令牌制根治（v3 agent + 令牌门 server + flock 单实例）
+
+### 剩余工程债（按价值排序）
+
+- **P1-A**：weather cron 定时调度（runtime 调度器已存在，接上即可）——每日 8 点自动播报天气
+- **P1-B**：真实麦克风人声实测（live 链路目前仅 fixture 模拟）
+- **P2**：sys-cache-clean / chrome-clean 真实能力（高危删除类，走权限申请单）；记忆蒸馏机制；跨域记忆向量检索（当前 LIKE）；DeepSeek 备用模型
+- **P3**：观察期收尾——日常使用中记录残留英文词条（汉化线）
