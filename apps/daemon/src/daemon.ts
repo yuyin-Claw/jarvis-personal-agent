@@ -17,8 +17,10 @@
  */
 import { mkdirSync, appendFileSync } from "node:fs";
 import path from "node:path";
+import os from "node:os";
 import type Database from "better-sqlite3";
-import { SqliteMemoryEngine } from "@jarvis/memory";
+import { SqliteMemoryEngine, OllamaEmbeddingProvider, OpenAIEmbeddingProvider } from "@jarvis/memory";
+import { LLMGateway, OpenAICompatibleProvider } from "@jarvis/llm-gateway";
 import { SqliteTaskManager } from "@jarvis/task-manager";
 import { ContinuousRuntime, findStagnantTasks, type NotifyChannel, type ProactiveNotice } from "@jarvis/runtime";
 import { ContextEngine, type AwarenessSource } from "@jarvis/context-engine";
@@ -27,6 +29,8 @@ import { loadConfig } from "./config.js";
 import { initPlatform } from "./platform.js";
 import { createEmbodiedRuntime } from "./embodied.js";
 import { PreferenceNotifyChannel } from "./preferences.js";
+import { createOllamaDistiller, createOllamaWikiWriter, withDistillerFallback } from "./memory-local.js";
+import { MemoryMaintenance } from "./memory-maintenance.js";
 
 /** 通知文件通道（跨进程可读：CLI/未来 UI 轮询此文件展示通知） */
 class FileNotifyChannel implements NotifyChannel {
@@ -65,19 +69,67 @@ async function main(): Promise<void> {
   mkdirSync(dataDir, { recursive: true });
   const notifyFile = path.join(dataDir, "notifications.log");
 
-  const memory = new SqliteMemoryEngine({ path: config.dbPath });
+  const ollamaBaseUrl = process.env.JARVIS_OLLAMA_BASE_URL ?? "http://127.0.0.1:11434";
+  const memory = new SqliteMemoryEngine({
+    path: config.dbPath,
+    embedding: (process.env.JARVIS_MEMORY_EMBEDDING_BACKEND ?? "ollama") === "zhipu"
+      ? new OpenAIEmbeddingProvider({
+          baseUrl: config.baseUrl,
+          apiKey: config.apiKey,
+          model: process.env.JARVIS_EMBEDDING_MODEL ?? "embedding-3",
+          dimensions: Number(process.env.JARVIS_EMBEDDING_DIMENSIONS ?? 256),
+        })
+      : new OllamaEmbeddingProvider({
+          baseUrl: ollamaBaseUrl,
+          model: process.env.JARVIS_OLLAMA_EMBEDDING_MODEL ?? "qwen3-embedding:0.6b",
+        }),
+  });
   memory.migrate();
   const taskDb = (memory as unknown as { db: Database.Database }).db;
   const tasks = new SqliteTaskManager({ db: taskDb });
   tasks.migrate();
 
   // ---- 能力注册表（0.4：weather cron 需要调 SkillRunner）----
-  const os = await import("node:os");
   const capDbPath = process.env.JARVIS_CAP_DB
     ?? path.join(os.homedir(), ".local/share/jarvis/capabilities.db");
   const capSkillsRoot = process.env.JARVIS_SKILLS_ROOT
     ?? path.join(os.homedir(), ".local/share/jarvis/skills");
   const capRegistry = new CapabilityRegistry({ dbPath: capDbPath, skillsRoot: capSkillsRoot });
+
+  // ---- 自动记忆维护（本地 Qwen3 主用，GLM 云端备用） ----
+  const gateway = new LLMGateway();
+  gateway.register(new OpenAICompatibleProvider({
+    id: "zhipu",
+    baseUrl: config.baseUrl,
+    apiKey: config.apiKey,
+    models: [{ id: config.model, provider: "zhipu", vision: true }],
+  }));
+  const glmDistill = async (prompt: string) => {
+    const r = await gateway.generate({
+      model: config.model,
+      messages: [{ role: "user", content: prompt }],
+      temperature: 0.1,
+      timeoutMs: 120_000,
+    });
+    return r.content;
+  };
+  const localDistill = createOllamaDistiller({
+    baseUrl: ollamaBaseUrl,
+    model: process.env.JARVIS_OLLAMA_DISTILL_MODEL ?? "qwen3:4b",
+  });
+  const memoryMaintenance = new MemoryMaintenance({
+    engine: memory,
+    rootDir: path.join(os.homedir(), ".local/share/jarvis/memory/wiki"),
+    summarize: process.env.JARVIS_MEMORY_DISTILLER === "glm"
+      ? glmDistill
+      : withDistillerFallback(localDistill, glmDistill, (e) => {
+          console.error(`〔自动记忆：本地蒸馏不可用，降级 GLM〕${e.message}`);
+        }),
+    synthesize: createOllamaWikiWriter({
+      baseUrl: ollamaBaseUrl,
+      model: process.env.JARVIS_OLLAMA_DISTILL_MODEL ?? "qwen3:4b",
+    }),
+  });
 
   // ---- 平台适配 + 具身运行时（ADR-007 / 0.2-④⑤） ----
   const platform = await initPlatform();
@@ -234,8 +286,28 @@ async function main(): Promise<void> {
     },
   });
 
+  // 自动记忆维护：有新消息的会话增量蒸馏，dirty 时统一更新 Wiki。
+  const configuredMemoryInterval = Number(process.env.JARVIS_MEMORY_INTERVAL_MS ?? 15 * 60_000);
+  const memoryIntervalMs = Number.isFinite(configuredMemoryInterval) && configuredMemoryInterval >= 60_000
+    ? configuredMemoryInterval
+    : 15 * 60_000;
+  if (process.env.JARVIS_MEMORY_AUTO !== "0") {
+    rt.schedule({
+      id: "memory-maintenance",
+      name: "自动记忆维护",
+      intervalMs: memoryIntervalMs,
+      run: async () => {
+        const report = await memoryMaintenance.runOnce();
+        if (report.records > 0 || report.wikiCompiled || report.errors.length > 0) {
+          console.log(`〔自动记忆〕扫描 ${report.scanned} 会话，写入/刷新 ${report.records} 条，Wiki ${report.wikiCompiled ? `已更新（${report.overviewMode}）` : "无需更新"}`);
+        }
+        for (const error of report.errors) console.error(`〔自动记忆失败〕${error}`);
+      },
+    });
+  }
+
   console.log(`JARVIS daemon 0.2 · 平台 ${platform.id} · 数据 ${config.dbPath} · 通知 ${notifyFile}`);
-  console.log(`停滞检查 ${checkIntervalMs / 1000}s · 活动采样 120s · 空闲交流 600s · 心跳 30s · 天气 cron 每日 08:00（城市 ${process.env.JARVIS_WEATHER_CITY ?? "Shanghai"}） · Ctrl+C 退出`);
+  console.log(`停滞检查 ${checkIntervalMs / 1000}s · 活动采样 120s · 空闲交流 600s · 心跳 30s · 记忆维护 ${process.env.JARVIS_MEMORY_AUTO === "0" ? "关闭" : `${memoryIntervalMs / 1000}s`} · 天气 cron 每日 08:00（城市 ${process.env.JARVIS_WEATHER_CITY ?? "Shanghai"}） · Ctrl+C 退出`);
 
   // 优雅退出
   let stopped = false;
@@ -244,10 +316,17 @@ async function main(): Promise<void> {
     stopped = true;
     console.log("\n〔退出〕清理定时器与数字人窗口…");
     rt.stop();
-    void embodied.stop().finally(() => {
-      memory.close();
-      process.exit(0);
+    const idleTimeout = new Promise<void>((resolve) => {
+      const timer = setTimeout(resolve, 5_000);
+      timer.unref();
     });
+    void Promise.race([memoryMaintenance.waitForIdle(), idleTimeout])
+      .then(() => embodied.stop())
+      .catch(() => undefined)
+      .finally(() => {
+        memory.close();
+        process.exit(0);
+      });
   };
   process.on("SIGINT", shutdown);
   process.on("SIGTERM", shutdown);
@@ -261,6 +340,8 @@ async function main(): Promise<void> {
   if (first) await rt.runJob(first);
   const firstGreeting = rt.getJob("idle-greeting");
   if (firstGreeting) await rt.runJob(firstGreeting);
+  const firstMemory = rt.getJob("memory-maintenance");
+  if (firstMemory) void rt.runJob(firstMemory);
 
   // 保持事件循环
   setInterval(() => undefined, 1 << 30);
