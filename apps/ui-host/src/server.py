@@ -7,6 +7,8 @@
 
 API：
     POST /ui/render      生成界面（type + data + title + actions）
+    GET  /ui/windows     已保存窗口列表
+    POST /ui/reopen/<id> 按持久化元数据重开窗口
     GET  /ui/result/<id> 查询用户操作结果
     POST /ui/close/<id>  关闭窗口
     GET  /health         健康检查
@@ -34,7 +36,32 @@ JARVIS_ROOT = HOME / ".local/share/jarvis"
 SETTINGS_FILE = JARVIS_ROOT / "settings.json"
 
 # 窗口注册表：windowId → {type, title, data, actions, result, createdAt}
-WINDOWS = {}
+WINDOWS_FILE = JARVIS_ROOT / "ui-windows" / "windows.json"
+
+
+def load_windows() -> dict:
+    """服务重启后恢复窗口元数据；损坏文件保留备份，不静默吞掉。"""
+    if not WINDOWS_FILE.exists():
+        return {}
+    try:
+        data = json.loads(WINDOWS_FILE.read_text(encoding="utf-8"))
+        return data if isinstance(data, dict) else {}
+    except Exception as e:
+        backup = WINDOWS_FILE.with_name(f"windows.corrupt-{int(time.time())}.json")
+        WINDOWS_FILE.replace(backup)
+        print(f"[ui-host] 窗口注册表损坏，已备份到 {backup}: {e}", file=sys.stderr)
+        return {}
+
+
+def save_windows():
+    """原子落盘，避免服务被杀时留下半个 JSON。"""
+    WINDOWS_FILE.parent.mkdir(parents=True, exist_ok=True)
+    tmp = WINDOWS_FILE.with_suffix(".json.tmp")
+    tmp.write_text(json.dumps(WINDOWS, ensure_ascii=False, indent=2), encoding="utf-8")
+    tmp.replace(WINDOWS_FILE)
+
+
+WINDOWS = load_windows()
 
 
 class UIHostHandler(BaseHTTPRequestHandler):
@@ -76,6 +103,18 @@ class UIHostHandler(BaseHTTPRequestHandler):
                 "settings": load_settings(),
                 "services": service_status(),
             })
+            return
+
+        if path == "/ui/windows":
+            items = [{
+                "windowId": window_id,
+                "type": w.get("type"),
+                "title": w.get("title"),
+                "result": w.get("result"),
+                "createdAt": w.get("createdAt"),
+                "reopenedAt": w.get("reopenedAt"),
+            } for window_id, w in WINDOWS.items()]
+            self._json(200, {"ok": True, "windows": items})
             return
 
         if path.startswith("/ui/result/"):
@@ -126,6 +165,10 @@ class UIHostHandler(BaseHTTPRequestHandler):
             self._handle_render()
             return
 
+        if path.startswith("/ui/reopen/"):
+            self._handle_reopen(path.split("/")[-1])
+            return
+
         if path.startswith("/ui/close/"):
             window_id = path.split("/")[-1]
             self._handle_close(window_id)
@@ -137,6 +180,18 @@ class UIHostHandler(BaseHTTPRequestHandler):
             return
 
         self._json(404, {"ok": False, "error": f"未知端点：POST {path}"})
+
+    def _spawn_window(self, html_path: Path):
+        proc = subprocess.Popen(
+            ["python3", str(JARVIS_ROOT / "ui-host" / "src" / "window.py"), str(html_path)],
+            stdout=subprocess.DEVNULL,
+            stderr=subprocess.PIPE,
+        )
+        def log_stderr():
+            for line in proc.stderr:
+                print(f"[window.py] {line.decode().strip()}", file=sys.stderr, flush=True)
+        import threading
+        threading.Thread(target=log_stderr, daemon=True).start()
 
     def _handle_render(self):
         """生成界面并弹出窗口"""
@@ -171,22 +226,32 @@ class UIHostHandler(BaseHTTPRequestHandler):
 
         # 弹出窗口（webkit2gtk）
         try:
-            proc = subprocess.Popen(
-                ["python3", str(JARVIS_ROOT / "ui-host" / "src" / "window.py"), str(html_path)],
-                stdout=subprocess.DEVNULL,
-                stderr=subprocess.PIPE,
-            )
-            # 捕获 stderr 到日志
-            def log_stderr():
-                for line in proc.stderr:
-                    print(f"[window.py] {line.decode().strip()}", file=sys.stderr, flush=True)
-            import threading
-            threading.Thread(target=log_stderr, daemon=True).start()
+            self._spawn_window(html_path)
+            save_windows()
         except Exception as e:
             self._json(500, {"ok": False, "error": f"窗口弹出失败：{e}"})
             return
 
         self._json(200, {"ok": True, "windowId": window_id, "htmlPath": str(html_path)})
+
+    def _handle_reopen(self, window_id: str):
+        """按持久化元数据重新生成并打开窗口；历史 result 保留。"""
+        w = WINDOWS.get(window_id)
+        if not w:
+            self._json(404, {"ok": False, "error": f"窗口不存在：{window_id}"})
+            return
+        html_path = JARVIS_ROOT / "ui-windows" / f"{window_id}.html"
+        html = render_html(w["type"], w["title"], w.get("data", {}), w.get("actions", []), window_id)
+        try:
+            html_path.parent.mkdir(parents=True, exist_ok=True)
+            html_path.write_text(html, encoding="utf-8")
+            self._spawn_window(html_path)
+            w["reopenedAt"] = int(time.time() * 1000)
+            w["reopenCount"] = int(w.get("reopenCount", 0)) + 1
+            save_windows()
+            self._json(200, {"ok": True, "windowId": window_id, "htmlPath": str(html_path), "result": w.get("result")})
+        except Exception as e:
+            self._json(500, {"ok": False, "error": f"窗口重开失败：{e}"})
 
     def _handle_close(self, window_id: str):
         """关闭窗口"""
@@ -195,6 +260,7 @@ class UIHostHandler(BaseHTTPRequestHandler):
             self._json(404, {"ok": False, "error": f"窗口不存在：{window_id}"})
             return
         w["result"] = {"action": "close", "at": int(time.time() * 1000)}
+        save_windows()
         self._json(200, {"ok": True, "windowId": window_id})
 
     def _handle_action(self, window_id: str):
@@ -209,6 +275,7 @@ class UIHostHandler(BaseHTTPRequestHandler):
             self._json(400, {"ok": False, "error": f"请求体解析失败：{e}"})
             return
         w["result"] = {"action": body.get("action"), "data": body.get("data"), "at": int(time.time() * 1000)}
+        save_windows()
         self._json(200, {"ok": True, "windowId": window_id})
 
 
