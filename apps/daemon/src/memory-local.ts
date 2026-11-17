@@ -1,4 +1,4 @@
-import type { MemorySummarizer, WikiSynthesizer } from "@jarvis/memory";
+import type { MemorySummarizer, WikiSynthesizer, WikiConflictJudge } from "@jarvis/memory";
 
 export interface OllamaDistillerOptions {
   baseUrl?: string;
@@ -109,6 +109,44 @@ export function createOllamaWikiWriter(opts: OllamaDistillerOptions = {}): WikiS
     }).join("\n\n");
     if (returnedIds > 0 && mappedIds === 0) throw new Error("Ollama Wiki 返回了无效 memory id");
     return markdown;
+  };
+}
+
+/** Wiki 冲突复核：只返回 ID 对和布尔判定，由 WikiLinter 校验，禁止自由生成原因。 */
+export function createOllamaConflictJudge(opts: OllamaDistillerOptions = {}): WikiConflictJudge {
+  const baseUrl = (opts.baseUrl ?? "http://127.0.0.1:11434").replace(/\/$/, "");
+  const model = opts.model ?? "qwen3:4b";
+  return async (prompt) => {
+    const response = await fetch(`${baseUrl}/api/chat`, {
+      method: "POST",
+      headers: { "content-type": "application/json" },
+      body: JSON.stringify({
+        model,
+        messages: [{ role: "user", content: prompt }],
+        stream: false,
+        think: false,
+        keep_alive: 0,
+        options: { temperature: 0, num_predict: 300 },
+        format: {
+          type: "array",
+          items: {
+            type: "object",
+            properties: {
+              ids: { type: "array", items: { type: "string" }, minItems: 2, maxItems: 2 },
+              conflict: { type: "boolean" },
+            },
+            required: ["ids", "conflict"],
+            additionalProperties: false,
+          },
+        },
+      }),
+      signal: AbortSignal.timeout(opts.timeoutMs ?? 180_000),
+    });
+    const body = await response.json() as OllamaChatResponse;
+    if (!response.ok || !body.message?.content) {
+      throw new Error(`Ollama 冲突复核失败（HTTP ${response.status}）：${body.error ?? "响应无内容"}`);
+    }
+    return body.message.content;
   };
 }
 

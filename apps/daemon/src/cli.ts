@@ -9,7 +9,7 @@
  *   jarvis talk "问题"       # 具身对话：数字人 + 语音 + 流式对话链路
  *   jarvis talk             # 具身对话交互模式
  *   jarvis tasks            # 任务列表
- *   jarvis memory [list|search|distill|reindex|wiki]  # 长期记忆、语义检索、蒸馏与 Wiki 编译
+ *   jarvis memory [list|search|distill|reindex|wiki|lint|correct|delete]  # 长期记忆、Wiki 编译与纠正
  *   jarvis capabilities [list|run|health|register|enable|disable]  # 能力注册表（0.4）
  *   jarvis capabilities grant <name> <cap> <res> <mode>   # 授予权限（必须已在 skill.json 声明）
  *   jarvis capabilities revoke <name> <cap> <res>          # 撤销权限
@@ -29,12 +29,12 @@ import path from "node:path";
 import os from "node:os";
 import type Database from "better-sqlite3";
 import { LLMGateway, OpenAICompatibleProvider } from "@jarvis/llm-gateway";
-import { SqliteMemoryEngine, OpenAIEmbeddingProvider, OllamaEmbeddingProvider, MemoryDistiller, WikiCompiler } from "@jarvis/memory";
+import { SqliteMemoryEngine, OpenAIEmbeddingProvider, OllamaEmbeddingProvider, MemoryDistiller, WikiCompiler, WikiLinter } from "@jarvis/memory";
 import { SqliteTaskManager } from "@jarvis/task-manager";
 import { Orchestrator } from "@jarvis/orchestrator";
 import { CodingHarness, PermissionBroker, type AuditEntry } from "@jarvis/harness-runtime";
 import { CapabilityRegistry, SkillFactory } from "@jarvis/capability-registry";
-import { createOllamaDistiller, createOllamaWikiWriter, withDistillerFallback } from "./memory-local.js";
+import { createOllamaDistiller, createOllamaWikiWriter, createOllamaConflictJudge, withDistillerFallback } from "./memory-local.js";
 import { ContextEngine } from "@jarvis/context-engine";
 import type { AwarenessSource } from "@jarvis/context-engine";
 import { ConversationGateway } from "./gateway.js";
@@ -491,6 +491,14 @@ async function main(): Promise<void> {
   // ---- 长期记忆：列表 / 语义检索 / 增量蒸馏 / 向量重建 ----
   if (args[0] === "memory") {
     const sub = args[1] ?? "list";
+    const defaultWikiRoot = process.env.JARVIS_WIKI_ROOT ?? path.join(os.homedir(), ".local/share/jarvis/memory/wiki");
+    const compileWikiAt = async (rootDir: string) => new WikiCompiler(memory).compile({
+      rootDir,
+      synthesize: createOllamaWikiWriter({
+        baseUrl: ollamaBaseUrl,
+        model: process.env.JARVIS_OLLAMA_DISTILL_MODEL ?? "qwen3:4b",
+      }),
+    });
     if (sub === "list") {
       const records = memory.list();
       if (records.length === 0) console.log("（无长期记忆）");
@@ -531,19 +539,38 @@ async function main(): Promise<void> {
       const count = await memory.reindexAll();
       console.log(`已为 ${count} 条记忆重建向量索引`);
     } else if (sub === "wiki") {
-      const rootDir = path.resolve(args[2] ?? path.join(os.homedir(), ".local/share/jarvis/memory/wiki"));
-      const compiler = new WikiCompiler(memory);
-      const result = await compiler.compile({
+      const rootDir = path.resolve(args[2] ?? defaultWikiRoot);
+      const result = await compileWikiAt(rootDir);
+      console.log(`Wiki 编译完成：${result.recordCount} 条记忆，${result.files.length} 个页面，概览模式 ${result.overviewMode}`);
+      console.log(`  ${result.rootDir}`);
+    } else if (sub === "lint") {
+      const rootDir = path.resolve(args[2] ?? defaultWikiRoot);
+      const report = await new WikiLinter(memory).lint({
         rootDir,
-        synthesize: createOllamaWikiWriter({
+        conflictJudge: createOllamaConflictJudge({
           baseUrl: ollamaBaseUrl,
           model: process.env.JARVIS_OLLAMA_DISTILL_MODEL ?? "qwen3:4b",
         }),
       });
-      console.log(`Wiki 编译完成：${result.recordCount} 条记忆，${result.files.length} 个页面，概览模式 ${result.overviewMode}`);
-      console.log(`  ${result.rootDir}`);
+      console.log(`Lint 完成：${report.issues.length} 项问题，${report.warnings.length} 项警告`);
+      console.log(`  ${report.lintPath}`);
+    } else if (sub === "correct") {
+      const id = args[2];
+      const content = args.slice(3).join(" ").trim();
+      if (!id || !content) { console.error("用法：memory correct <id> <content>"); process.exit(1); }
+      const updated = memory.update(id, content);
+      if (!updated) { console.error(`记忆不存在：${id}`); process.exit(1); }
+      await memory.reindexAll();
+      await compileWikiAt(defaultWikiRoot);
+      console.log(`已纠正并重建索引/Wiki：${updated.id}`);
+    } else if (sub === "delete") {
+      const id = args[2];
+      if (!id) { console.error("用法：memory delete <id>"); process.exit(1); }
+      if (!memory.delete(id)) { console.error(`记忆不存在：${id}`); process.exit(1); }
+      await compileWikiAt(defaultWikiRoot);
+      console.log(`已删除并刷新 Wiki：${id}`);
     } else {
-      console.error("用法：jarvis memory [list | search [--lexical] <query> | distill [conversationId] | reindex | wiki [path]]");
+      console.error("用法：jarvis memory [list | search [--lexical] <query> | distill [conversationId] | reindex | wiki [path] | lint [path] | correct <id> <content> | delete <id>]");
       process.exit(1);
     }
     memory.close();

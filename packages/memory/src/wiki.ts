@@ -47,7 +47,7 @@ function dirFor(kind: MemoryRecord["kind"]): string {
   }
 }
 
-function pageFor(record: MemoryRecord): string {
+export function wikiPageFor(record: MemoryRecord): string {
   return record.kind === "user_profile" ? "user/preferences.md" : `${dirFor(record.kind)}/${record.id}.md`;
 }
 
@@ -76,7 +76,7 @@ export class WikiCompiler {
   async compile(opts: WikiCompileOptions): Promise<WikiCompileResult> {
     const records = this.engine.list();
     const pages = new Map<string, string>();
-    const pageById = new Map(records.map((r) => [r.id, pageFor(r)]));
+    const pageById = new Map(records.map((r) => [r.id, wikiPageFor(r)]));
     const related = new Map<string, MemoryRecord[]>();
     for (const record of records) {
       const conversation = record.sourceRef?.split(":")[0];
@@ -93,7 +93,7 @@ export class WikiCompiler {
       const directory = dirFor(kind);
       const indexLines = [`${HEADER}`, `# ${directory}`, ""];
       for (const record of group) {
-        const page = pageFor(record);
+        const page = wikiPageFor(record);
         const title = titleOf(record);
         indexLines.push(`- [[${page.replace(/\.md$/, "")}|${title}]]`);
         const relatedLines = (related.get(record.id) ?? []).flatMap((other) => {
@@ -150,7 +150,7 @@ export class WikiCompiler {
         overviewMode = "deterministic-fallback";
       }
     }
-    const recent = records.slice(0, 10).map((r) => `- [[${pageFor(r).replace(/\.md$/, "")}|${titleOf(r)}]]（${r.updatedAt.slice(0, 10)}）`);
+    const recent = records.slice(0, 10).map((r) => `- [[${wikiPageFor(r).replace(/\.md$/, "")}|${titleOf(r)}]]（${r.updatedAt.slice(0, 10)}）`);
     pages.set("overview.md", [HEADER, "# JARVIS 记忆概览", "", "> LLM 概览仅用于导航；事实以链接页面为准。", "", synthesis, "", "## 最近更新", ...(recent.length ? recent : ["- 暂无记忆"]), ""].join("\n"));
 
     const links = ["- [[overview|记忆概览]]"];

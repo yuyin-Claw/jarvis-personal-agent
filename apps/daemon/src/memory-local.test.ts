@@ -1,5 +1,5 @@
 import { describe, expect, it, vi } from "vitest";
-import { createOllamaDistiller, createOllamaWikiWriter, withDistillerFallback } from "./memory-local.js";
+import { createOllamaDistiller, createOllamaWikiWriter, createOllamaConflictJudge, withDistillerFallback } from "./memory-local.js";
 
 describe("Ollama 本地记忆蒸馏", () => {
   it("使用 JSON Schema、非思考和完成后卸载模型", async () => {
@@ -44,6 +44,21 @@ describe("Ollama 本地记忆蒸馏", () => {
     }), { status: 200 })));
     const write = createOllamaWikiWriter();
     await expect(write("[mem_real] (project) 原始事实")).rejects.toThrow("无效 memory id");
+    vi.unstubAllGlobals();
+  });
+
+  it("冲突 judge 使用 ID 对 JSON Schema 并完成后卸载", async () => {
+    const fetchMock = vi.fn(async () => new Response(JSON.stringify({
+      message: { content: '[{"ids":["mem_1","mem_2"],"conflict":true}]' },
+    }), { status: 200 }));
+    vi.stubGlobal("fetch", fetchMock);
+    const judge = createOllamaConflictJudge();
+    expect(await judge("记忆对")).toContain("conflict");
+    const init = fetchMock.mock.calls[0]![1] as RequestInit;
+    const body = JSON.parse(String(init.body));
+    expect(body.format.type).toBe("array");
+    expect(body.format.items.required).toEqual(["ids", "conflict"]);
+    expect(body.keep_alive).toBe(0);
     vi.unstubAllGlobals();
   });
 
