@@ -46,6 +46,40 @@ describe("VoiceServiceSpeechInput 实时监听", () => {
     expect(got.find((e) => e.type === "final")).toMatchObject({ text: "请介绍一下你自己" });
   });
 
+  it("kws_detected 立即派空 partial，ASR final 再进入对话", async () => {
+    const t0 = Date.now();
+    const { input } = inputWith([
+      { live: true, state: "listening", target: null, events: [
+        { type: "kws_detected", at: t0 + 100 },
+      ] },
+      { live: true, state: "listening", target: null, events: [
+        { type: "final", at: t0 + 200, text: "介绍一下你自己", id: 1 },
+      ] },
+    ]);
+    const got: SpeechInputEvent[] = [];
+    input.onEvent((e) => got.push(e));
+    await input.startLive(undefined, 10);
+    await new Promise((r) => setTimeout(r, 100));
+    await input.stopLive();
+    expect(got.map((e) => e.type)).toEqual(expect.arrayContaining(["partial", "final"]));
+    expect(got.find((e) => e.type === "partial")).toMatchObject({ text: "" });
+  });
+
+  it("session_end 映射为退出唤醒提示事件", async () => {
+    const t0 = Date.now();
+    const { input } = inputWith([
+      { live: true, state: "listening", target: null, events: [
+        { type: "session_end", at: t0 + 100, text: "有事请随时叫我" },
+      ] },
+    ]);
+    const got: SpeechInputEvent[] = [];
+    input.onEvent((e) => got.push(e));
+    await input.startLive(undefined, 10);
+    await new Promise((r) => setTimeout(r, 60));
+    await input.stopLive();
+    expect(got.find((e) => e.type === "session_end")).toMatchObject({ text: "有事请随时叫我" });
+  });
+
   it("轮询失败不中断、后续事件仍送达", async () => {
     const t0 = Date.now();
     let fail = true;

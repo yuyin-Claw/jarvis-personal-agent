@@ -86,6 +86,15 @@ export class VoiceServiceClient {
     return j;
   }
 
+  async listenPlayback(playing: boolean): Promise<void> {
+    const r = await this.doFetch(`${this.base}/listen/playback`, {
+      method: "POST",
+      headers: { "content-type": "application/json" },
+      body: JSON.stringify({ playing }),
+    });
+    if (!r.ok) throw new Error(`listen/playback ${r.status}`);
+  }
+
   async listenStop(): Promise<void> {
     const r = await this.doFetch(`${this.base}/listen/stop`, { method: "POST" });
     if (!r.ok) throw new Error(`listen/stop ${r.status}`);
@@ -112,6 +121,7 @@ export class VoiceServiceSpeechOutput implements SpeechOutputAdapter {
   /** 当前轮次的中止器：合成（HTTP）与播放阶段都可被立即打断 */
   private cancel: (() => void) | undefined;
   private busy = false;
+  private playbackSignal: Promise<void> = Promise.resolve();
   private readonly platform: NodeJS.Platform;
 
   constructor(id: AdapterId, private readonly opts: VoiceServiceOptions) {
@@ -121,6 +131,13 @@ export class VoiceServiceSpeechOutput implements SpeechOutputAdapter {
   }
 
   get speaking(): boolean { return this.busy || this.current !== undefined; }
+
+  private setPlayback(playing: boolean): Promise<void> {
+    this.playbackSignal = this.playbackSignal
+      .then(() => this.client.listenPlayback?.(playing))
+      .catch(() => undefined); // 无实时监听时不影响 TTS 播放
+    return this.playbackSignal;
+  }
 
   async speak(text: string, speakOpts: SpeakOptions = {}): Promise<SpeakEndReason> {
     if (this.speaking) this.interrupt();
@@ -138,10 +155,15 @@ export class VoiceServiceSpeechOutput implements SpeechOutputAdapter {
       proc?.kill("SIGTERM");
     };
 
+    let playbackStarted = false;
     const settle = (reason: SpeakEndReason, dir?: string) => {
       this.busy = false;
       this.current = undefined;
       this.cancel = undefined;
+      if (playbackStarted) {
+        playbackStarted = false;
+        void this.setPlayback(false);
+      }
       if (dir) { try { fs.rmSync(dir, { recursive: true, force: true }); } catch { /* best effort */ } }
       return reason;
     };
@@ -164,6 +186,9 @@ export class VoiceServiceSpeechOutput implements SpeechOutputAdapter {
     const file = path.join(dir, `speech.${result.format}`);
     fs.writeFileSync(file, result.audio);
     const player = this.opts.player ?? (this.platform === "darwin" ? "afplay" : "pw-play");
+    await this.setPlayback(true);
+    playbackStarted = true;
+    if (interrupted) return settle("interrupted", dir);
     try {
       proc = spawn(player, [file], { stdio: "ignore" });
     } catch {
@@ -297,12 +322,18 @@ export class VoiceServiceSpeechInput implements SpeechInputAdapter {
     for (const ev of st.events) {
       this.liveSince = Math.max(this.liveSince, ev.at);
       switch (ev.type) {
-        // VAD 检测到人声：立即 partial（空文本）→ 触发打断 TTS / 切 listening
+        // KWS 命中（Silero 路径）或 VAD 检测到人声（能量降级路径）：
+        // 立即 partial（空文本）→ 打断 TTS，不能等 ASR final。
+        case "kws_detected":
         case "speech_start":
           if (!this.inUtterance) {
             this.inUtterance = true;
             this.emit({ type: "partial", text: "" });
           }
+          break;
+        case "session_end":
+          this.inUtterance = false;
+          this.emit({ type: "session_end", text: ev.text ?? "有事请随时叫我" });
           break;
         // 一段转写完成：final → 结束聆听进 thinking
         case "final":
@@ -344,7 +375,7 @@ export class VoiceServiceSpeechInput implements SpeechInputAdapter {
   /** 接到 VoiceIO：首段 partial 打断 TTS，final 结束聆听 */
   attach(voice: VoiceIO): () => void {
     return this.onEvent((e) => {
-      if (e.type === "partial" && e.text) {
+      if (e.type === "partial") {
         if (voice.tts.speaking) voice.interrupt();
         else voice.startListening();
       } else if (e.type === "final") {

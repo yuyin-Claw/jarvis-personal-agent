@@ -38,11 +38,13 @@ export class LiveListener {
     this.session = null;
     this.events = [];
     this.eventSeq = 0;
+    this.playback = false;
   }
 
   describe() {
     return {
       live: !!this.session,
+      playback: this.playback,
       target: this.session?.target ?? null,
       startedAt: this.session?.startedAt ?? null,
       utterances: this.session ? this.session.utterances.length : 0,
@@ -54,8 +56,9 @@ export class LiveListener {
     if (this.session) throw new Error("监听会话已在进行中（先 /listen/stop）");
     const dir = fs.mkdtempSync(path.join(os.tmpdir(), "jarvis-live-"));
     const raw = path.join(dir, "stream.raw");
+    const playbackFile = path.join(dir, "playback.state");
     this.session = {
-      dir, raw, target,
+      dir, raw, target, playbackFile,
       startedAt: Date.now(),
       proc: null,
       pythonProc: null,  // live-sensevoice.py 子进程
@@ -66,6 +69,7 @@ export class LiveListener {
       silenceMs: 0,
       lastEmit: 0,
     };
+    fs.writeFileSync(playbackFile, this.playback ? "1" : "0");
     this.emit("listening_start", {});
 
     // pw-record 语法：输出文件是位置参数（无 -o 选项）
@@ -87,7 +91,7 @@ export class LiveListener {
     const pythonScript = path.join(os.homedir(), ".local/share/jarvis/jarvis-voice-service/src/live-sensevoice.py");
     const senseVoiceModel = path.join(os.homedir(), ".local/share/jarvis/sense-voice/model.int8.onnx");
     if (fs.existsSync(pythonScript) && fs.existsSync(senseVoiceModel)) {
-      const pythonProc = spawn("python3", [pythonScript, raw], {
+      const pythonProc = spawn("python3", [pythonScript, raw, this.session.playbackFile], {
         stdio: ["ignore", "pipe", "pipe"],
       });
       this.session.pythonProc = pythonProc;
@@ -117,6 +121,13 @@ export class LiveListener {
       // 降级：能量法 VAD（现有 tick 逻辑）
       this.session.timer = setInterval(() => this.tick(), 60);
     }
+    return this.describe();
+  }
+
+  /** TTS 播放态：Python 每轮读取控制文件；播报中保留 KWS，屏蔽普通 ASR。 */
+  setPlayback(playing) {
+    this.playback = !!playing;
+    if (this.session) fs.writeFileSync(this.session.playbackFile, this.playback ? "1" : "0");
     return this.describe();
   }
 

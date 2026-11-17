@@ -70,7 +70,7 @@ export interface SpeechOutputAdapter {
   probe(): Promise<AdapterStatus>;
 }
 
-export type SpeechInputEventType = "status" | "ready" | "partial" | "final" | "error";
+export type SpeechInputEventType = "status" | "ready" | "partial" | "final" | "error" | "session_end";
 
 export interface SpeechInputEvent {
   type: SpeechInputEventType;

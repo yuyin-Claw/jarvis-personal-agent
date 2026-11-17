@@ -29,6 +29,8 @@ from pathlib import Path
 import numpy as np
 import sherpa_onnx
 
+from wake_gate import WakeCommandGate
+
 HOME = Path.home()
 JARVIS_ROOT = HOME / ".local/share/jarvis"
 
@@ -39,12 +41,20 @@ def log_event(event_type: str, **data):
     print(json.dumps(event, ensure_ascii=False), flush=True)
 
 
+def playback_is_playing(control_file: str) -> bool:
+    try:
+        return Path(control_file).read_text(encoding="utf-8").strip() == "1"
+    except (FileNotFoundError, OSError):
+        return False
+
+
 def main():
     if len(sys.argv) < 2:
         log_event("error", error="用法：live-sensevoice.py <ring-file>")
         sys.exit(1)
 
     ring_file = sys.argv[1]
+    playback_file = sys.argv[2] if len(sys.argv) > 2 else ""
 
     # 模型路径
     sense_voice_model = os.environ.get(
@@ -109,9 +119,17 @@ def main():
 
     event_id = 0
     kws_stream = kws.create_stream()
-    kws_triggered = False
+    wake_gate = WakeCommandGate(float(os.environ.get(
+        "JARVIS_WAKE_SESSION_TIMEOUT_S",
+        os.environ.get("JARVIS_WAKE_COMMAND_TIMEOUT_S", "300"),
+    )))
+    interrupt_pending = False
 
     while True:
+        if wake_gate.expired(time.monotonic()):
+            log_event("session_end", text="有事请随时叫我", reason="唤醒会话空闲超时")
+            wake_gate.reset()
+            interrupt_pending = False
         # 读 ring 文件增量
         try:
             size = os.path.getsize(ring_file)
@@ -150,7 +168,8 @@ def main():
                 result = kws.get_result(kws_stream)
                 if result:
                     log_event("kws_detected", keyword=result)
-                    kws_triggered = True
+                    interrupt_pending = True
+                    wake_gate.wake(result, time.monotonic())
                     kws_stream = kws.create_stream()  # 重置 KWS 流
 
             # VAD 分段
@@ -159,8 +178,11 @@ def main():
                 duration = len(segment.samples) / sample_rate
                 log_event("speech_segment", start=segment.start / sample_rate, duration=duration)
 
-                # 如果 KWS 已触发，进 ASR；否则丢弃
-                if kws_triggered:
+                # TTS 播报时只接受新唤醒打断，禁止把 JARVIS 自己的声音当用户指令。
+                playing = playback_is_playing(playback_file)
+                if playing and not interrupt_pending:
+                    log_event("speech_discard", durMs=int(duration * 1000), reason="TTS 播报中，仅允许唤醒打断")
+                elif wake_gate.active:
                     event_id += 1
                     log_event("transcribing", id=event_id)
                     t0 = time.time()
@@ -169,9 +191,25 @@ def main():
                     recognizer.decode_stream(stream)
                     latency_ms = round((time.time() - t0) * 1000)
                     text = stream.result.text
-                    log_event("final", id=event_id, text=text, engine="sensevoice", latencyMs=latency_ms)
-                    kws_triggered = False  # 重置 KWS 状态
-                    kws_stream = kws.create_stream()
+                    decision = wake_gate.on_text(text, time.monotonic())
+                    if decision == "wait":
+                        log_event("wake_ready", id=event_id, text=text, engine="sensevoice", latencyMs=latency_ms)
+                    elif decision == "stop":
+                        interrupt_pending = False
+                        log_event("playback_stop", id=event_id, text=text, engine="sensevoice", latencyMs=latency_ms)
+                        kws_stream = kws.create_stream()
+                    elif decision == "sleep":
+                        interrupt_pending = False
+                        log_event("session_end", text="好的，我先休息。有事请随时叫我", reason="语音指令进入睡眠")
+                        kws_stream = kws.create_stream()
+                    elif decision == "accept":
+                        log_event("final", id=event_id, text=text, engine="sensevoice", latencyMs=latency_ms)
+                        interrupt_pending = False
+                        # 保持唤醒会话，下一条指令可直接输入；有效指令已在 gate 内刷新计时。
+                        kws_stream = kws.create_stream()
+                    else:
+                        interrupt_pending = False
+                        log_event("speech_discard", durMs=int(duration * 1000), reason="唤醒指令超时")
                 else:
                     log_event("speech_discard", durMs=int(duration * 1000), reason="无唤醒词")
 

@@ -97,6 +97,11 @@ const server = http.createServer(async (req, res) => {
       json(res, 200, envelope(true, live.status(since)));
       return;
     }
+    if (route === "listen/playback" && req.method === "POST") {
+      const body = await readBody(req);
+      json(res, 200, envelope(true, live.setPlayback(body.playing === true)));
+      return;
+    }
     if (route === "listen/stop" && req.method === "POST") {
       json(res, 200, envelope(true, await live.stop()));
       return;
@@ -150,5 +155,14 @@ server.listen(port, host, () => {
   }));
 });
 
-process.on("SIGTERM", () => server.close(() => process.exit(0)));
-process.on("SIGINT", () => server.close(() => process.exit(0)));
+let shuttingDown = false;
+async function shutdown() {
+  if (shuttingDown) return;
+  shuttingDown = true;
+  try { await live.stop(); } catch { /* best effort */ }
+  backend.dispose?.();
+  server.close(() => process.exit(0));
+  setTimeout(() => process.exit(0), 2_000).unref();
+}
+process.on("SIGTERM", shutdown);
+process.on("SIGINT", shutdown);

@@ -1,5 +1,5 @@
 import { describe, expect, it, vi } from "vitest";
-import { existsSync, mkdtempSync, readFileSync } from "node:fs";
+import { existsSync, mkdtempSync, readFileSync, writeFileSync } from "node:fs";
 import { tmpdir } from "node:os";
 import { join } from "node:path";
 import type { PlatformAdapter } from "@jarvis/platform";
@@ -81,6 +81,25 @@ describe("语音服务端点（ADR-009）", () => {
     const text = await input.submitAudio(Buffer.alloc(1024), "aiff", "zh");
     expect(text).toBe("请介绍一下你自己");
     expect(events).toEqual(["partial:请介绍一下你自己", "final:请介绍一下你自己"]);
+  });
+
+  it("播放前通知 playing=true，interrupt 杀播放器并恢复 playing=false", async () => {
+    const dir = mkdtempSync(join(tmpdir(), "jarvis-player-test-"));
+    const player = join(dir, "player.sh");
+    writeFileSync(player, "#!/bin/sh\nsleep 30\n", { mode: 0o755 });
+    const playback: boolean[] = [];
+    const out = new VoiceServiceSpeechOutput("macos", {
+      url: "http://x", player,
+      fetchImpl: fakeFetch({
+        tts: () => ({ ok: true, audio: Buffer.from("RIFF-test").toString("base64"), format: "wav", sampleRate: 22050 }),
+        playback: (body) => { playback.push(body.playing === true); return { ok: true }; },
+      }),
+    });
+    const pending = out.speak("正在播放");
+    await vi.waitFor(() => expect(playback).toContain(true));
+    out.interrupt();
+    expect(await pending).toBe("interrupted");
+    await vi.waitFor(() => expect(playback).toContain(false));
   });
 
   it("合成阶段即可被打断（用户开口取消未完成的 TTS 请求）", async () => {

@@ -7,6 +7,7 @@
  *   jarvis --continue       # 继续最近会话
  *   jarvis ask "问题"        # 单次问答（Orchestrator 决策 + Harness）
  *   jarvis talk "问题"       # 具身对话：数字人 + 语音 + 流式对话链路
+ *   jarvis live             # 实时语音：唤醒/ASR → Orchestrator → TTS/UI，支持打断
  *   jarvis talk             # 具身对话交互模式
  *   jarvis tasks            # 任务列表
  *   jarvis llm stats        # 主备模型调用、耗时与 token 统计
@@ -800,7 +801,7 @@ async function main(): Promise<void> {
   }
 
   // ---- 单轮处理：决策 → 必要时启动 Harness ----
-  async function ask(text: string): Promise<void> {
+  async function ask(text: string): Promise<string> {
     process.stdout.write("JARVIS> ");
 
     // 1. Orchestrator 决策
@@ -809,6 +810,7 @@ async function main(): Promise<void> {
 
     // 2. 按决策执行
     if (d.type === "invoke_capability" && d.invoke) {
+      let capabilityReply = d.text;
       // 已注册能力的真实执行（能力闭环最后一环：对话→能力→结果）
       // 走 capRegistry.run 安全入口（先校验权限，ADR-011 红线）
       try {
@@ -818,7 +820,7 @@ async function main(): Promise<void> {
           output.write(d.text + "\n");
           memory.appendMessage(conversationId, "user", text);
           memory.appendMessage(conversationId, "assistant", d.text);
-          return;
+          return d.text;
         }
         if (d.text) console.log(`〔${d.text}〕`);
         const result = await capRegistry.run(d.invoke.name, { args: d.invoke.args ?? {} });
@@ -833,14 +835,16 @@ async function main(): Promise<void> {
           reply = `能力执行失败：${r.error ?? result.stderr ?? "未知错误"}`;
         }
         console.log(reply);
+        capabilityReply = reply;
         memory.appendMessage(conversationId, "user", text);
         memory.appendMessage(conversationId, "assistant", reply);
       } catch (e) {
         const msg = `能力执行异常：${(e as Error).message}`;
+        capabilityReply = msg;
         console.log(msg);
         memory.appendMessage(conversationId, "assistant", msg);
       }
-      return;
+      return capabilityReply;
     }
     if (d.type === "invoke_ui" && d.ui) {
       // FR-12 Dynamic UI Host：生成交互界面（设置/任务列表/确认/进度条）
@@ -877,7 +881,7 @@ async function main(): Promise<void> {
         console.log(d.text);
         memory.appendMessage(conversationId, "assistant", d.text);
       }
-      return;
+      return d.text || "已处理界面请求";
     }
     if (d.type === "capability_gap" && d.gap) {
       // 能力缺口：自动生成骨架（staging，零权限、不注册），等用户审批
@@ -896,7 +900,7 @@ async function main(): Promise<void> {
         console.log(`\n${d.text}`);
       }
       memory.appendMessage(conversationId, "assistant", d.text);
-      return;
+      return d.text;
     }
     if (d.type === "create_task" && turn.task) {
       const t = turn.task;
@@ -918,7 +922,7 @@ async function main(): Promise<void> {
         console.log(`  目标：${t.goal}`);
         console.log(`  原因：${t.requiresApproval ? "高危任务" : verdict.reason}`);
         console.log(`  确认执行：jarvis run ${t.id}`);
-        return;
+        return `任务已创建，等待确认：${t.title}`;
       }
       // 3. 派 Harness 执行
       console.log(`〔委派 ${harness.id} 执行：${t.title}…〕`);
@@ -932,7 +936,7 @@ async function main(): Promise<void> {
         tasks.transition(t.id, "FAILED");
         console.log(`〔任务失败〕${(e as Error).message}`);
         memory.appendMessage(conversationId, "assistant", `任务失败：${(e as Error).message}`);
-        return;
+        return `任务失败：${(e as Error).message}`;
       }
       tasks.assign(t.id, harness.id, job.jobId);
       // 等待作业完成
@@ -946,22 +950,22 @@ async function main(): Promise<void> {
           });
           console.log(`〔任务完成 · ${ev.status.steps} 步〕`);
           console.log(ev.status.output ?? "");
-          return;
+          return ev.status.output ?? "任务完成";
         } else if (ev.type === "failed") {
           tasks.transition(t.id, "FAILED", {
             error: ev.status.error ?? "未知错误",
             finishedAt: new Date().toISOString(),
           });
           console.log(`〔任务失败〕${ev.status.error ?? ""}`);
-          return;
+          return ev.status.error ?? "任务失败";
         }
       }
-      return;
+      return "任务已结束";
     }
 
     if (d.type === "continue_task" && turn.task) {
       console.log(`〔继续任务 ${turn.task.id}：${turn.task.title}〕`);
-      return;
+      return `继续任务：${turn.task.title}`;
     }
 
     // answer / ask：直接输出
@@ -969,6 +973,82 @@ async function main(): Promise<void> {
     // 同时落对话记录（决策文本作为 assistant 消息）
     memory.appendMessage(conversationId, "user", text);
     memory.appendMessage(conversationId, "assistant", d.text);
+    return d.text;
+  }
+
+  // ---- 实时语音模式：KWS/ASR final → 完整 Orchestrator → TTS/UI；partial 立即打断 ----
+  if (args[0] === "live") {
+    const { createEmbodiedRuntime } = await import("./embodied.js");
+    const { LiveConversation } = await import("./live-conversation.js");
+    let speechCancelled = false;
+    let runtime: ReturnType<typeof createEmbodiedRuntime>;
+    runtime = createEmbodiedRuntime({
+      platform,
+      tasks,
+      reply: async (text, hooks) => {
+        // 动作请求保留完整 Orchestrator；纯故事/闲聊走流式句子 TTS 快速路径。
+        if (!/故事|笑话|闲聊|聊天|介绍你自己|你是谁|讲一个|讲个/.test(text)) {
+          return { kind: "answer", text: await ask(text) };
+        }
+        speechCancelled = false;
+        let pending = "";
+        let ttsQueue = Promise.resolve();
+        const queueSentence = (sentence: string) => {
+          const value = sentence.trim();
+          if (!value || speechCancelled) return;
+          ttsQueue = ttsQueue.then(async () => {
+            if (!speechCancelled) await runtime.voice.speak(value);
+          });
+        };
+        const consume = (final: boolean) => {
+          const sentences = pending.split(/(?<=[。！？!?；;])/u);
+          pending = sentences.pop() ?? "";
+          for (const sentence of sentences) queueSentence(sentence);
+          if (final && pending.trim()) {
+            queueSentence(pending);
+            pending = "";
+          }
+        };
+        await conversation.receive(
+          { conversationId, text },
+          {
+            onDelta: (delta) => {
+              hooks.onDelta?.(delta);
+              pending += delta;
+              consume(false);
+            },
+            onMemoryInjected: (hits) => hooks.onMemoryInjected?.(hits.length),
+          },
+        );
+        consume(true);
+        await ttsQueue;
+        return { kind: "silent" }; // 句子已逐个播放，禁止 Embodied 再读一遍全文。
+      },
+      avatar: process.env.JARVIS_LIVE_NO_AVATAR !== "1",
+      voice: process.env.JARVIS_LIVE_NO_VOICE !== "1",
+    });
+    const live = new LiveConversation(
+      platform.speechInput as import("./voice-service.js").VoiceServiceSpeechInput,
+      runtime,
+      { onInterrupt: () => { speechCancelled = true; } },
+    );
+    await live.start();
+    console.log("JARVIS 实时语音已启动：请说唤醒词，Ctrl+C 停止");
+    let stopped = false;
+    const stop = () => { if (!stopped) { stopped = true; stopPromise.resolve(); } };
+    const stopPromise = { resolve: () => undefined as void };
+    const wait = new Promise<void>((resolve) => { stopPromise.resolve = resolve; });
+    process.once("SIGINT", stop);
+    process.once("SIGTERM", stop);
+    try {
+      await wait;
+    } finally {
+      process.off("SIGINT", stop);
+      process.off("SIGTERM", stop);
+      await live.stop();
+      memory.close();
+    }
+    return;
   }
 
   if (args[0] === "ask" && args[1]) {

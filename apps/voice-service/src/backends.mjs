@@ -15,7 +15,9 @@ import fs from "node:fs";
 import os from "node:os";
 import path from "node:path";
 import { promisify } from "node:util";
+import { fileURLToPath } from "node:url";
 import { CONTRACT_VERSION, pcmWav, sanitizeText } from "./contract.mjs";
+import { KokoroClient, kokoroModelReady } from "./kokoro-client.mjs";
 
 const run = promisify(execFile);
 
@@ -76,6 +78,14 @@ export class OmarchyBackend extends BaseBackend {
     this.superwhisper = env.JARVIS_ASR_SUPERWHISPER === "0" ? null : which("superwhisper");
     this.piper = which("piper");
     this.espeak = env.JARVIS_ESPEAK_BIN ?? (which("espeak-ng") ?? which("espeak"));
+    const kokoroDir = env.JARVIS_KOKORO_MODEL_DIR ?? path.join(os.homedir(), ".local/share/jarvis/kokoro-multi-lang-v1_0");
+    this.kokoroVoice = env.JARVIS_KOKORO_VOICE ?? "zf_xiaoxiao";
+    this.kokoroSpeed = Number(env.JARVIS_KOKORO_SPEED ?? 1.0);
+    this.kokoroClient = env.JARVIS_KOKORO_TTS !== "0" && kokoroModelReady(kokoroDir)
+      ? new KokoroClient(fileURLToPath(new URL("./kokoro-tts.py", import.meta.url)), {
+        env: { JARVIS_KOKORO_MODEL_DIR: kokoroDir, JARVIS_KOKORO_THREADS: env.JARVIS_KOKORO_THREADS ?? "2" },
+      })
+      : null;
     this.ffmpeg = which("ffmpeg");
     this.upstream = env.JARVIS_VOICE_UPSTREAM ?? "";
     this.model = env.JARVIS_ASR_MODEL ?? "base";
@@ -111,8 +121,10 @@ export class OmarchyBackend extends BaseBackend {
           : this.superwhisper && !this.whisperCli && !this.vosk ? "guest-process" : "guest-local",
       },
       tts: {
-        engine: ttsLocal ? (this.piper ? "piper" : "espeak-ng") : (this.upstream ? "upstream" : "none"),
-        voice: "zh-CN", ready: ttsLocal || !!this.upstream, local: ttsLocal,
+        engine: this.kokoroClient ? "kokoro" : (ttsLocal ? (this.piper ? "piper" : "espeak-ng") : (this.upstream ? "upstream" : "none")),
+        voice: this.kokoroClient ? this.kokoroVoice : "zh-CN",
+        ready: !!this.kokoroClient || ttsLocal || !!this.upstream,
+        local: !!this.kokoroClient || ttsLocal,
       },
       upstream: this.upstream || undefined,
     };
@@ -212,6 +224,17 @@ export class OmarchyBackend extends BaseBackend {
   async synthesize(text, opts = {}) {
     const clean = sanitizeText(text);
     if (!clean) throw err("TTS 文本为空");
+    if (this.kokoroClient) {
+      try {
+        return await this.kokoroClient.synthesize(clean, {
+          voice: opts.voice && opts.voice !== "zh-CN" ? opts.voice : this.kokoroVoice,
+          speed: opts.speed ?? this.kokoroSpeed,
+        });
+      } catch (e) {
+        console.error(`[tts] Kokoro 失败，降级 Piper：${e.message}`);
+        if (this.env.JARVIS_KOKORO_REQUIRED === "1") throw e;
+      }
+    }
     if (!this.piper && !this.espeak) {
       const r = await this.upstreamCall("tts", { text: clean, voice: opts.voice, rate: opts.rate });
       return { ...r, audio: Buffer.from(r.audio, "base64"), engine: `upstream:${r.engine}` };
@@ -241,6 +264,9 @@ export class OmarchyBackend extends BaseBackend {
     } catch (e) {
       throw err(`本地 TTS 失败：${e.message}`, e);
     } finally { cleanup(d); }
+  }
+  dispose() {
+    this.kokoroClient?.dispose();
   }
 }
 

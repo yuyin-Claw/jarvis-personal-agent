@@ -120,6 +120,17 @@ describe("LiveListener VAD 状态机", () => {
     expect(st2.events.some((e) => e.type === "speech_start")).toBe(false); // 已消费过滤
   });
 
+  it("TTS 播放态原子联动控制文件并体现在状态里", () => {
+    listener = new LiveListener(fakeBackend());
+    startFakeSession(listener);
+    listener.session.playbackFile = path.join(listener.session.dir, "playback.state");
+    listener.setPlayback(true);
+    expect(fs.readFileSync(listener.session.playbackFile, "utf8")).toBe("1");
+    expect(listener.describe().playback).toBe(true);
+    listener.setPlayback(false);
+    expect(fs.readFileSync(listener.session.playbackFile, "utf8")).toBe("0");
+  });
+
   it("stop 清理会话且幂等", async () => {
     listener = new LiveListener(fakeBackend());
     startFakeSession(listener);
