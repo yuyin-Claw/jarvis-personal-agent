@@ -2,6 +2,8 @@ export { CapabilityRegistry, SkillRunner } from "./registry.js";
 export type { RegistryOptions, RunResult } from "./registry.js";
 export type { CapabilityKind, CapabilityRecord, RegisterInput, SkillManifest } from "./types.js";
 export { SkillFactory } from "./factory.js";
+export { McpFactory } from "./mcp-factory.js";
+export type { McpFactoryOptions, McpGenerateResult } from "./mcp-factory.js";
 export type {
   GapReport, FactoryOptions, DraftResult,
   DevelopOptions, DevelopResult, RepairOptions, RepairResult, RepairAttempt,

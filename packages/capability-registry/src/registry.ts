@@ -233,6 +233,9 @@ export class CapabilityRegistry {
    * 不得绕过直接 new SkillRunner。
    */
   async run(name: string, input: unknown, opts: { timeoutMs?: number } = {}): Promise<RunResult> {
+    const capability = this.findByName(name);
+    if (!capability) throw new Error(`能力未注册：${name}`);
+    if (capability.enabled !== 1) throw new Error(`能力已禁用，拒绝执行：${name}`);
     const declared = this.getDeclaredPermissions(name);
     if (declared.length === 0) {
       // 零权限能力直接放行

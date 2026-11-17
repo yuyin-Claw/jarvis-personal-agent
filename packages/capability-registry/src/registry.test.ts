@@ -63,11 +63,12 @@ describe("CapabilityRegistry", () => {
     expect(again.enabled).toBe(0); // 幂等返回既有（含禁用状态）
   });
 
-  it("禁用 = 回滚（不删文件，可再启用）", () => {
+  it("禁用 = 回滚（不删文件，可再启用）", async () => {
     registry.register({ name: "b", version: "1", kind: "skill", entry: "b" });
     expect(registry.setEnabled("b", "1", false)).toBe(true);
     expect(registry.list({ enabledOnly: true })).toHaveLength(0);
     expect(registry.get("b", "1")).toBeDefined(); // 记录还在
+    await expect(registry.run("b", {})).rejects.toThrow("已禁用");
     registry.setEnabled("b", "1", true);
     expect(registry.list({ enabledOnly: true })).toHaveLength(1);
   });

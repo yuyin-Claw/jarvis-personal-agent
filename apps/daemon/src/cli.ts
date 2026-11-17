@@ -15,7 +15,7 @@
  *   jarvis capabilities grant <name> <cap> <res> <mode>   # 授予权限（必须已在 skill.json 声明）
  *   jarvis capabilities revoke <name> <cap> <res>          # 撤销权限
  *   jarvis capabilities permissions <name>                 # 权限对照（已声明 vs 已授予）
- *   jarvis factory [list|draft|approve|reject]   # Skill 工厂（0.4：缺口→骨架→审批→注册）
+ *   jarvis factory [list|draft|approve|reject|mcp]   # Skill/MCP 工厂（审批与权限边界不变）
  *   jarvis platform         # 平台适配器五端点状态（macOS / Omarchy）
  *
  * talk 环境变量：JARVIS_TALK_NO_AVATAR=1 关闭窗口、JARVIS_TALK_NO_VOICE=1 关闭语音、
@@ -34,7 +34,7 @@ import { SqliteMemoryEngine, OpenAIEmbeddingProvider, OllamaEmbeddingProvider, M
 import { SqliteTaskManager } from "@jarvis/task-manager";
 import { Orchestrator } from "@jarvis/orchestrator";
 import { CodingHarness, PermissionBroker, type AuditEntry } from "@jarvis/harness-runtime";
-import { CapabilityRegistry, SkillFactory } from "@jarvis/capability-registry";
+import { CapabilityRegistry, SkillFactory, McpFactory } from "@jarvis/capability-registry";
 import { createOllamaDistiller, createOllamaWikiWriter, createOllamaConflictJudge, withDistillerFallback } from "./memory-local.js";
 import { ContextEngine } from "@jarvis/context-engine";
 import type { AwarenessSource } from "@jarvis/context-engine";
@@ -87,6 +87,10 @@ async function main(): Promise<void> {
             console.log(`${c.name.padEnd(16)} ${c.version.padEnd(8)} ${c.kind.padEnd(9)} ${flag.padEnd(5)} ${c.health.padEnd(10)} ${c.description.slice(0, 40)}`);
           }
         }
+      } else if (sub === "versions" && args[2]) {
+        const versions = registry.list().filter((c) => c.name === args[2]);
+        if (versions.length === 0) console.log("（无版本记录）");
+        for (const c of versions) console.log(`${c.version.padEnd(10)} ${c.enabled ? "启用" : "停用"}  ${c.created_at}  ${c.health}`);
       } else if (sub === "run" && args[2]) {
         // jarvis capabilities run <name> [json-arg]
         // 走 registry.run 安全入口（先校验权限再执行，ADR-011 红线）
@@ -214,6 +218,12 @@ async function main(): Promise<void> {
         const drafts = factory.listDrafts();
         if (drafts.length === 0) console.log("（staging 无待审批骨架）");
         else for (const d of drafts) console.log(`${d.name.padEnd(24)} ${d.need.slice(0, 40)}`);
+      } else if (sub === "mcp" && args[2]) {
+        const outputRoot = process.env.JARVIS_MCP_ROOT ?? path.join(os.homedir(), ".local/share/jarvis/mcp");
+        const result = new McpFactory({ registry, outputRoot }).generate(args[2]);
+        console.log(`已生成 MCP：${result.name}@${result.version}`);
+        console.log(`  ${result.serverPath}`);
+        console.log("  启动：node " + result.serverPath);
       } else if (sub === "approve" && args[2]) {
         // PLAN Step 4.3 + Step 4.4 完整流水线：security review → sandbox test → register
         // 红线默认开启：未通过任一步则拒绝注册
