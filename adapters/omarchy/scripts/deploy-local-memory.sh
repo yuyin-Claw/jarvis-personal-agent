@@ -3,7 +3,8 @@
 set -eu
 CORE="$HOME/.local/share/jarvis/core"
 mkdir -p "$CORE/apps/daemon/dist" "$CORE/packages/memory/dist"
-cp /mnt/mac/cli.js /mnt/mac/daemon.js /mnt/mac/memory-local.js "$CORE/apps/daemon/dist/"
+# 同步完整编译目录，禁止挑选单文件（daemon 还依赖 preferences.js 等内部模块）。
+cp -r /mnt/mac/daemon-dist/. "$CORE/apps/daemon/dist/"
 cp -r /mnt/mac/memory-dist/. "$CORE/packages/memory/dist/"
 systemctl --user restart jarvis-core
 systemctl --user is-active jarvis-core
