@@ -65,6 +65,18 @@ export interface MessageRecord {
   createdAt: string;
 }
 
+/** 模型调用日志（与 llm-gateway 的 CallLogEntry 结构兼容） */
+export interface LLMCallLogRecord {
+  id?: number;
+  timestamp: string;
+  providerId: string;
+  model: string;
+  ok: boolean;
+  durationMs: number;
+  usage?: { promptTokens?: number; completionTokens?: number; totalTokens?: number };
+  errorCode?: string;
+}
+
 /** 隐私过滤器：内容含敏感信息时拒绝入库（架构红线） */
 export interface PrivacyFilter {
   /** 返回拒绝原因；null 表示放行 */

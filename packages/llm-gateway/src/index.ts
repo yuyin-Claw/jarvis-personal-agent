@@ -1,6 +1,8 @@
 export { LLMGateway } from "./gateway.js";
 export { OpenAICompatibleProvider } from "./openai-compatible.js";
 export type { OpenAICompatibleOptions } from "./openai-compatible.js";
+export { FallbackProvider, isRetryableModelError } from "./fallback.js";
+export type { FallbackProviderOptions } from "./fallback.js";
 export { LLMError } from "./types.js";
 export type {
   CallLogEntry,

@@ -45,6 +45,8 @@ export interface OpenAICompatibleOptions {
   timeoutMs?: number;
   /** 调用日志（可选） */
   callLog?: CallLogSink;
+  /** 端点扩展字段（如 Ollama 的 think:false） */
+  extraBody?: Record<string, unknown>;
   /** 注入 fetch（测试用） */
   fetchImpl?: typeof fetch;
 }
@@ -69,6 +71,7 @@ export class OpenAICompatibleProvider implements LLMProvider {
   private readonly models: ModelInfo[];
   private readonly defaultTimeoutMs: number;
   private readonly callLog?: CallLogSink;
+  private readonly extraBody: Record<string, unknown>;
   private readonly fetchImpl: typeof fetch;
 
   constructor(opts: OpenAICompatibleOptions) {
@@ -78,6 +81,7 @@ export class OpenAICompatibleProvider implements LLMProvider {
     this.models = opts.models;
     this.defaultTimeoutMs = opts.timeoutMs ?? 60_000;
     this.callLog = opts.callLog;
+    this.extraBody = opts.extraBody ?? {};
     this.fetchImpl = opts.fetchImpl ?? fetch;
   }
 
@@ -100,6 +104,7 @@ export class OpenAICompatibleProvider implements LLMProvider {
         messages: request.messages,
         ...(request.tools ? { tools: request.tools } : {}),
         ...(request.temperature !== undefined ? { temperature: request.temperature } : {}),
+        ...this.extraBody,
       },
       request.timeoutMs ?? this.defaultTimeoutMs,
     );
@@ -152,6 +157,7 @@ export class OpenAICompatibleProvider implements LLMProvider {
           ...(request.temperature !== undefined
             ? { temperature: request.temperature }
             : {}),
+          ...this.extraBody,
         },
         request.timeoutMs ?? this.defaultTimeoutMs,
       );
@@ -181,6 +187,7 @@ export class OpenAICompatibleProvider implements LLMProvider {
           ...(request.temperature !== undefined
             ? { temperature: request.temperature }
             : {}),
+          ...this.extraBody,
         },
         request.timeoutMs ?? this.defaultTimeoutMs,
       );

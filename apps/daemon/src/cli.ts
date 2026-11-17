@@ -9,6 +9,7 @@
  *   jarvis talk "问题"       # 具身对话：数字人 + 语音 + 流式对话链路
  *   jarvis talk             # 具身对话交互模式
  *   jarvis tasks            # 任务列表
+ *   jarvis llm stats        # 主备模型调用、耗时与 token 统计
  *   jarvis memory [list|search|distill|reindex|wiki|lint|correct|delete]  # 长期记忆、Wiki 编译与纠正
  *   jarvis capabilities [list|run|health|register|enable|disable]  # 能力注册表（0.4）
  *   jarvis capabilities grant <name> <cap> <res> <mode>   # 授予权限（必须已在 skill.json 声明）
@@ -28,7 +29,7 @@ import { mkdirSync, readFileSync } from "node:fs";
 import path from "node:path";
 import os from "node:os";
 import type Database from "better-sqlite3";
-import { LLMGateway, OpenAICompatibleProvider } from "@jarvis/llm-gateway";
+import { LLMGateway, OpenAICompatibleProvider, FallbackProvider, type CallLogEntry } from "@jarvis/llm-gateway";
 import { SqliteMemoryEngine, OpenAIEmbeddingProvider, OllamaEmbeddingProvider, MemoryDistiller, WikiCompiler, WikiLinter } from "@jarvis/memory";
 import { SqliteTaskManager } from "@jarvis/task-manager";
 import { Orchestrator } from "@jarvis/orchestrator";
@@ -390,16 +391,34 @@ async function main(): Promise<void> {
     },
   });
 
-  // ---- LLM ----
+  // ---- LLM：GLM 主用 + Omarchy 本地备用（可重试错误才切换） ----
   const gateway = new LLMGateway();
-  gateway.register(
-    new OpenAICompatibleProvider({
-      id: "zhipu",
-      baseUrl: config.baseUrl,
-      apiKey: config.apiKey,
-      models: [{ id: config.model, provider: "zhipu", vision: true }],
-    }),
-  );
+  const callLog = { append: (e: CallLogEntry) => memory.appendLLMCall(e) };
+  const zhipu = new OpenAICompatibleProvider({
+    id: "zhipu",
+    baseUrl: config.baseUrl,
+    apiKey: config.apiKey,
+    models: [{ id: config.model, provider: "zhipu", vision: true }],
+    callLog,
+  });
+  const localChatModel = process.env.JARVIS_OLLAMA_CHAT_MODEL ?? "qwen3:4b";
+  const localChat = new OpenAICompatibleProvider({
+    id: "ollama",
+    baseUrl: `${ollamaBaseUrl}/v1`,
+    apiKey: "ollama",
+    models: [{ id: localChatModel, provider: "ollama", toolCalling: true }],
+    extraBody: { think: false },
+    callLog,
+  });
+  gateway.register(process.env.JARVIS_CHAT_FALLBACK === "0" ? zhipu : new FallbackProvider({
+    primary: zhipu,
+    fallback: localChat,
+    primaryModel: config.model,
+    fallbackModel: localChatModel,
+    onFallback: (e, operation) => {
+      console.error(`〔主模型失败，切换本地 ${localChatModel}〕${operation}: ${e.message}`);
+    },
+  }));
 
   // ---- Harness（工作目录：~/jarvis-workspace，启动时确保存在） ----
   mkdirSync(envWorkDir(), { recursive: true });
@@ -572,6 +591,29 @@ async function main(): Promise<void> {
     } else {
       console.error("用法：jarvis memory [list | search [--lexical] <query> | distill [conversationId] | reindex | wiki [path] | lint [path] | correct <id> <content> | delete <id>]");
       process.exit(1);
+    }
+    memory.close();
+    return;
+  }
+
+  // ---- 模型调用统计（主备分别聚合） ----
+  if (args[0] === "llm" && (args[1] ?? "stats") === "stats") {
+    const logs = memory.listLLMCalls(1_000);
+    const ok = logs.filter((l) => l.ok).length;
+    const tokens = logs.reduce((sum, l) => sum + (l.usage?.totalTokens ?? 0), 0);
+    const avg = logs.length ? Math.round(logs.reduce((sum, l) => sum + l.durationMs, 0) / logs.length) : 0;
+    console.log(`近 ${logs.length} 次调用：成功 ${ok}，失败 ${logs.length - ok}，平均 ${avg}ms，总 tokens ${tokens}`);
+    const byModel = new Map<string, { calls: number; failed: number; duration: number; tokens: number }>();
+    for (const log of logs) {
+      const current = byModel.get(log.model) ?? { calls: 0, failed: 0, duration: 0, tokens: 0 };
+      current.calls++;
+      if (!log.ok) current.failed++;
+      current.duration += log.durationMs;
+      current.tokens += log.usage?.totalTokens ?? 0;
+      byModel.set(log.model, current);
+    }
+    for (const [model, s] of byModel) {
+      console.log(`  ${model}: ${s.calls} 次，失败 ${s.failed}，平均 ${Math.round(s.duration / s.calls)}ms，tokens ${s.tokens}`);
     }
     memory.close();
     return;

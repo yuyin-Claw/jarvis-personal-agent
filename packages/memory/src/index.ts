@@ -14,6 +14,7 @@ export { ALL_MIGRATIONS } from "./schema.js";
 export type {
   ConversationRecord,
   ImportanceEvaluator,
+  LLMCallLogRecord,
   MemoryCandidate,
   MemoryEngine,
   MemoryKind,

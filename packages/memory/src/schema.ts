@@ -86,9 +86,32 @@ export const M_1763140400_MEMORY_SEMANTIC: Migration = {
   },
 };
 
+/** 0.7：主备模型调用日志与用量统计 */
+export const M_1763140500_LLM_CALL_LOGS: Migration = {
+  id: 1763140500,
+  name: "llm_call_logs",
+  up: (db) => {
+    db.exec(`CREATE TABLE llm_call_logs (
+      id INTEGER PRIMARY KEY AUTOINCREMENT,
+      timestamp TEXT NOT NULL,
+      provider_id TEXT NOT NULL,
+      model TEXT NOT NULL,
+      ok INTEGER NOT NULL,
+      duration_ms INTEGER NOT NULL,
+      prompt_tokens INTEGER,
+      completion_tokens INTEGER,
+      total_tokens INTEGER,
+      error_code TEXT
+    )`);
+    db.exec("CREATE INDEX idx_llm_call_logs_time ON llm_call_logs(timestamp)");
+    db.exec("CREATE INDEX idx_llm_call_logs_model ON llm_call_logs(model, timestamp)");
+  },
+};
+
 export const ALL_MIGRATIONS = [
   M_1763140000_CONVERSATIONS,
   M_1763140100_MEMORIES,
   M_1763140300_AUDIT,
   M_1763140400_MEMORY_SEMANTIC,
+  M_1763140500_LLM_CALL_LOGS,
 ];

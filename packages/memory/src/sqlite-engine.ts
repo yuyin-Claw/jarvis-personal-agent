@@ -11,6 +11,7 @@ import { ALL_MIGRATIONS } from "./schema.js";
 import type {
   ConversationRecord,
   ImportanceEvaluator,
+  LLMCallLogRecord,
   MemoryCandidate,
   MemoryEngine,
   MemoryRecord,
@@ -399,6 +400,41 @@ export class SqliteMemoryEngine implements MemoryEngine {
       title: r.title as string,
       startedAt: r.started_at as string,
       lastMessageAt: r.last_message_at as string,
+    }));
+  }
+
+  // ---- 模型调用日志（主备分别记录，供 llm stats 聚合） ----
+  appendLLMCall(entry: LLMCallLogRecord): void {
+    this.db.prepare(`INSERT INTO llm_call_logs
+      (timestamp, provider_id, model, ok, duration_ms, prompt_tokens, completion_tokens, total_tokens, error_code)
+      VALUES (?,?,?,?,?,?,?,?,?)`).run(
+      entry.timestamp,
+      entry.providerId,
+      entry.model,
+      entry.ok ? 1 : 0,
+      Math.round(entry.durationMs),
+      entry.usage?.promptTokens ?? null,
+      entry.usage?.completionTokens ?? null,
+      entry.usage?.totalTokens ?? null,
+      entry.errorCode ?? null,
+    );
+  }
+
+  listLLMCalls(limit = 100): LLMCallLogRecord[] {
+    const rows = this.db.prepare("SELECT * FROM llm_call_logs ORDER BY id DESC LIMIT ?").all(limit) as Array<Record<string, unknown>>;
+    return rows.map((r) => ({
+      id: r.id as number,
+      timestamp: r.timestamp as string,
+      providerId: r.provider_id as string,
+      model: r.model as string,
+      ok: r.ok === 1,
+      durationMs: r.duration_ms as number,
+      usage: {
+        promptTokens: (r.prompt_tokens as number | null) ?? undefined,
+        completionTokens: (r.completion_tokens as number | null) ?? undefined,
+        totalTokens: (r.total_tokens as number | null) ?? undefined,
+      },
+      errorCode: (r.error_code as string | null) ?? undefined,
     }));
   }
 
