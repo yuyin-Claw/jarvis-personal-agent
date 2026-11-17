@@ -4,6 +4,8 @@ export { OpenAIEmbeddingProvider, OllamaEmbeddingProvider, cosineSimilarity } fr
 export type { EmbeddingProvider, OpenAIEmbeddingOptions, OllamaEmbeddingOptions } from "./embedding.js";
 export { MemoryDistiller } from "./distiller.js";
 export type { MemorySummarizer, DistillOptions, DistillResult } from "./distiller.js";
+export { WikiCompiler } from "./wiki.js";
+export type { WikiSynthesizer, WikiCompileOptions, WikiCompileResult } from "./wiki.js";
 export { runMigrations } from "./migrations.js";
 export type { Migration } from "./migrations.js";
 export { ALL_MIGRATIONS } from "./schema.js";

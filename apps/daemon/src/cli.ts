@@ -9,7 +9,7 @@
  *   jarvis talk "问题"       # 具身对话：数字人 + 语音 + 流式对话链路
  *   jarvis talk             # 具身对话交互模式
  *   jarvis tasks            # 任务列表
- *   jarvis memory [list|search|distill|reindex]  # 长期记忆、语义检索与增量蒸馏
+ *   jarvis memory [list|search|distill|reindex|wiki]  # 长期记忆、语义检索、蒸馏与 Wiki 编译
  *   jarvis capabilities [list|run|health|register|enable|disable]  # 能力注册表（0.4）
  *   jarvis capabilities grant <name> <cap> <res> <mode>   # 授予权限（必须已在 skill.json 声明）
  *   jarvis capabilities revoke <name> <cap> <res>          # 撤销权限
@@ -29,12 +29,12 @@ import path from "node:path";
 import os from "node:os";
 import type Database from "better-sqlite3";
 import { LLMGateway, OpenAICompatibleProvider } from "@jarvis/llm-gateway";
-import { SqliteMemoryEngine, OpenAIEmbeddingProvider, OllamaEmbeddingProvider, MemoryDistiller } from "@jarvis/memory";
+import { SqliteMemoryEngine, OpenAIEmbeddingProvider, OllamaEmbeddingProvider, MemoryDistiller, WikiCompiler } from "@jarvis/memory";
 import { SqliteTaskManager } from "@jarvis/task-manager";
 import { Orchestrator } from "@jarvis/orchestrator";
 import { CodingHarness, PermissionBroker, type AuditEntry } from "@jarvis/harness-runtime";
 import { CapabilityRegistry, SkillFactory } from "@jarvis/capability-registry";
-import { createOllamaDistiller, withDistillerFallback } from "./memory-local.js";
+import { createOllamaDistiller, createOllamaWikiWriter, withDistillerFallback } from "./memory-local.js";
 import { ContextEngine } from "@jarvis/context-engine";
 import type { AwarenessSource } from "@jarvis/context-engine";
 import { ConversationGateway } from "./gateway.js";
@@ -530,8 +530,20 @@ async function main(): Promise<void> {
     } else if (sub === "reindex") {
       const count = await memory.reindexAll();
       console.log(`已为 ${count} 条记忆重建向量索引`);
+    } else if (sub === "wiki") {
+      const rootDir = path.resolve(args[2] ?? path.join(os.homedir(), ".local/share/jarvis/memory/wiki"));
+      const compiler = new WikiCompiler(memory);
+      const result = await compiler.compile({
+        rootDir,
+        synthesize: createOllamaWikiWriter({
+          baseUrl: ollamaBaseUrl,
+          model: process.env.JARVIS_OLLAMA_DISTILL_MODEL ?? "qwen3:4b",
+        }),
+      });
+      console.log(`Wiki 编译完成：${result.recordCount} 条记忆，${result.files.length} 个页面，概览模式 ${result.overviewMode}`);
+      console.log(`  ${result.rootDir}`);
     } else {
-      console.error("用法：jarvis memory [list | search [--lexical] <query> | distill [conversationId] | reindex]");
+      console.error("用法：jarvis memory [list | search [--lexical] <query> | distill [conversationId] | reindex | wiki [path]]");
       process.exit(1);
     }
     memory.close();
