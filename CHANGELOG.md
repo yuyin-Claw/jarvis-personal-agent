@@ -3,6 +3,44 @@
 本项目的显著变更记录在此。格式参照 [Keep a Changelog](https://keepachangelog.com/zh-CN/1.1.0/)，
 版本号遵循 [SemVer](https://semver.org/lang/zh-CN/)。
 
+## [0.6.0] - 2026-11-17 — 本地长期记忆 · Wiki 知识层 · 全自动记忆维护
+
+本版把 JARVIS 从「对话有记忆」推进为「记忆会自己沉淀、索引、组织并持续更新」的完整体系，所有生产模型均部署在 Omarchy 内。
+
+### 本地记忆模型与语义检索
+
+- 新增增量记忆蒸馏：隐私过滤、重要性评估、去重、来源引用、会话水位线；失败不推进，二次执行零重复。
+- 新增向量表与语义+词法混合检索，ConversationGateway 自动使用语义召回，向量服务故障时回退词法。
+- Omarchy 用户级 ARM64 Ollama（零 sudo、systemd --user、仅 guest localhost）：
+  - `qwen3-embedding:0.6b`，完整 1024 维；中文基准 5/5 召回，热查询 P50 约 10ms。
+  - `qwen3:4b` 本地蒸馏，JSON Schema 约束，完成后 `keep_alive=0` 自动卸载；GLM 保留为云端备用。
+- 智谱 embedding-3/2 余额或资源包不可用不再导致记忆丢失。
+
+### Wiki 编译层
+
+- `jarvis memory wiki [path]`：SQLite 记忆编译为 `index/overview`、用户偏好、项目、决策、经验等 Markdown 页面。
+- YAML 保留 memory_id、来源、来源引用、置信度与更新时间；共同来源生成 wikilink。
+- manifest 只清理旧生成页面，用户手写文件保留；LLM 摘要失败自动生成确定性概览。
+- 概览采用「LLM 只选 memory id、代码按 SQLite 原文组装」，杜绝思考过程与概览幻觉。
+
+### 自动记忆维护
+
+- daemon 新增 `memory-maintenance` 调度：启动即恢复检查，之后默认每 15 分钟增量执行。
+- 只处理有新消息的会话，每轮限量、单实例防重入；蒸馏成功后统一更新 Wiki。
+- 单会话失败指数退避；Wiki dirty 失败下轮继续重试；优雅退出最多等待当前轮 5 秒。
+- `JARVIS_MEMORY_AUTO=0` 可关闭，`JARVIS_MEMORY_INTERVAL_MS` 可调整周期。
+
+### 能力工厂与交互
+
+- Factory `developWithRepair`：生成 → 安全审查 → 真实沙箱 → 失败诊断 → 自动重写；最终失败恢复骨架，成功后才更新 smoke，不自动 approve。
+- `Super+J` 全局快捷键：已有设置窗口则聚焦，否则经 UI Host 新建。
+
+### 部署与验证
+
+- Core 部署改为同步完整 daemon dist，修复漏拷 `preferences.js` 导致的重启循环。
+- Omarchy 正式数据库已生成默认 Wiki；自动调度日志、Core/Ollama/语音/UI/bridge 服务全部纳入验收。
+- **322 个单测 + typecheck 全绿**，另有 bridge 与 Python 回归。
+
 ## [0.5.0] - 2026-11-17 — 中文语音升级 · Dynamic UI · 设置中心闭环
 
 本版把「能听、能唤醒、能弹窗」推进为可操作系统设置的完整体验，并修复真实链路中发现的阻塞问题。

@@ -19,34 +19,30 @@
 
 ---
 
-## 二、当前真实状态（2026-11-16）
+## 二、当前真实状态（2026-11-17）
 
-### 代码状态（领先于文档）
+### 代码状态
 
-- **git HEAD**：`056a5a9` — feat(capability) 能力闭环最后一环 invoke_capability + weather-briefing 真实能力
-- **本地领先 origin/main 28 个 commit**，未推送
-- **测试**：251 单测全绿；十域 25 项冒烟断言全绿；12 项对话深测全过
-- **CHANGELOG**：停在 v0.2.1（2026-11-15），未反映 0.3 / 0.4 / 数字人 / 通道根治 / 能力闭环
+- **当前发布**：v0.6.0（本地长期记忆 + Wiki + 自动记忆维护）
+- **仓库**：main 与 origin/main 同步；CHANGELOG 已更新至 v0.6.0
+- **测试**：322 单测 + typecheck 全绿；bridge / Python / Omarchy 生产冒烟通过
 
 ### 已交付能力（按阶段）
 
 | 阶段 | 内容 | 状态 |
 |---|---|---|
-| **0.1 底座** | Core / llm-gateway / memory / task-manager / orchestrator / harness-runtime / PermissionBroker / context-engine / runtime / daemon | ✅ |
-| **0.2 具身** | Avatar 状态引擎 / VoiceIO / TTS / Talk / 全息渲染（GTK4+WebKitGTK） / 平台适配层（ADR-007） | ✅ |
-| **0.2.1 生产化** | 三 systemd unit 开机自启（voice / avatar / core）；语音引擎全本地化（whisper.cpp + piper zh_CN-huayan）；零 macOS 依赖（ADR-009） | ✅ |
-| **0.3 实时语音** | 实时麦克风链路（ADR-012）：VAD 段检测 + PipeWire null-sink 持久化 + 打断语义 | ✅ |
-| **0.4 Harness Factory** | 能力闭环（ADR-011）：capability_gap 探测 → Skill 工厂骨架生成 → 用户审批 → 注册 → 对话直调 invoke_capability | ✅ |
-| **数字人 v3.1** | 粒子人脸（蛋形轮廓 + 杏仁眼 + M 唇）+ 真实 TTS 振幅驱动口型 + unit 附着渲染 | ✅ |
-| **通道根治** | 注册令牌制（guest-bridge 令牌门 + agent v3 flock 单实例）——旧代理自然淘汰 | ✅ |
-| **首个真实能力** | weather-briefing：wttr.in 只读 + 英中映射 + invoke_capability 对话直调真实天气 | ✅ |
+| **0.1 底座** | Core / LLM Gateway / Memory / Task Manager / Orchestrator / Harness / PermissionBroker / Runtime | ✅ |
+| **0.2 具身与生产化** | Avatar / VoiceIO / TTS / Talk / systemd 常驻 / 平台适配 / Omarchy 自治 | ✅ |
+| **0.3 实时语音** | SenseVoice / Silero VAD / KWS 唤醒词 / PipeWire / 打断语义 | ✅ |
+| **0.4 Harness Factory** | gap → 骨架 → 多轮 develop/repair → 安全审查 → 沙箱 → 审批注册 → 对话直调 | ✅ |
+| **0.5 设置与 Dynamic UI** | UI Host / invoke_ui / 设置中心 / 自定义唤醒词 / Agent 启停 / Super+J | ✅ |
+| **0.6 长期记忆** | 本地 Qwen3 向量与蒸馏 / 增量水位线 / Wiki 编译层 / 自动记忆维护 / 失败退避 | ✅ |
 
-### 未做工程债（按价值排序）
+### 后续工程债（不阻塞当前版本）
 
-- **P0**：push 28 commit 到 origin；更新 CHANGELOG 至 v0.3.0；PROJECT.md 更新（本次）
-- **P1**：每日定时调度（weather cron 接入 runtime 调度器）；真实麦克风人声实测（live 链路目前仅 fixture 验证）
-- **P2**：sys-cache-clean 第二个真实能力（高危删除类，走权限申请单）；chrome-clean 已 approve 待实现；记忆蒸馏机制；跨域记忆向量检索（当前 LIKE）；DeepSeek 备用模型接入
-- **P3**：Obsidian 经验库同步人脸 v3.1 / 振幅口型 / 十域冒烟 / 通道根治 / invoke_capability / weather-briefing 段
+- **P1**：真人麦克风最终实测、Wiki Lint（冲突/过期/失效来源）、Dynamic UI 结果持久化与重开
+- **P2**：Ambient 文件/屏幕/浏览器感知、长期目标跟进、主聊天备用模型与成本统计持久化
+- **长期**：MCP Factory、能力版本自动升级、更多模态；多设备分布式与复杂 3D 仍属非目标
 
 ---
 

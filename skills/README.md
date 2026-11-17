@@ -17,7 +17,7 @@ skills/
 ├── registered/    ← 已注册能力（guest ~/.local/share/jarvis/skills/）
 │   ├── sysinfo/            参照 Skill：只读系统信息（零权限）
 │   ├── weather-briefing/   首个真实能力：wttr.in 天气查询（network 权限）
-│   └── chrome-clean/       已注册但未实现（骨架）
+│   └── chrome-clean/       已实现：浏览器缓存清理（dry-run 默认 + confirm + 数据保护）
 └── staging/       ← 待审骨架（guest ~/.local/share/jarvis/.factory-staging/）
     └── sys-cache-clean/    待审：系统缓存清理（高危删除类，需逐项权限申请）
 ```
@@ -66,11 +66,11 @@ sh adapters/omarchy/scripts/gexec.sh \
 - **不追踪权限授予状态**——权限是运行时用户批准落库的，备份只保留申请单（PERMISSION_REQUEST.md），恢复后需要重新 `capabilities grant`
 - **staging 是临时态**——已 approve 实现的骨架应当从 staging 删除（保留在 registered 即可）
 
-## 当前能力状态（2026-11-16）
+## 当前能力状态（2026-11-17）
 
 | 能力 | 状态 | 权限 |
 |---|---|---|
 | sysinfo | ✅ 已实现（参照） | 零 |
 | weather-briefing | ✅ 已实现 + 对话直调 | network（wttr.in:80，**待 grant**） |
-| chrome-clean | ⏳ 已注册骨架（implemented=false） | 待定 |
+| chrome-clean | ✅ 已实现（dry-run 默认；真删需 confirm + 逐项权限） | fs_read / fs_delete（按浏览器目录；保护 Cookies / Login Data / History） |
 | sys-cache-clean | ⏳ staging 待审 | 高危删除类，需逐项审批 |
