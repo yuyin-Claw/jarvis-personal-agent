@@ -11,3 +11,5 @@ export { MacNotifyChannel, escapeAppleScript } from "./mac-notify.js";
 export type { NotifyExecImpl } from "./mac-notify.js";
 export { findStagnantTasks } from "./stagnation.js";
 export type { StagnationConfig, StagnationReport } from "./stagnation.js";
+export { findStaleGoals } from "./goal-followup.js";
+export type { GoalLike, GoalFollowup } from "./goal-followup.js";

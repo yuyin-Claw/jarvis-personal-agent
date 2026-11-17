@@ -22,8 +22,8 @@ import type Database from "better-sqlite3";
 import { SqliteMemoryEngine, OllamaEmbeddingProvider, OpenAIEmbeddingProvider } from "@jarvis/memory";
 import { LLMGateway, OpenAICompatibleProvider } from "@jarvis/llm-gateway";
 import { SqliteTaskManager } from "@jarvis/task-manager";
-import { ContinuousRuntime, findStagnantTasks, type NotifyChannel, type ProactiveNotice } from "@jarvis/runtime";
-import { ContextEngine, type AwarenessSource } from "@jarvis/context-engine";
+import { ContinuousRuntime, findStagnantTasks, findStaleGoals, type NotifyChannel, type ProactiveNotice } from "@jarvis/runtime";
+import { ContextEngine, FileWatchSource, type AwarenessSource } from "@jarvis/context-engine";
 import { CapabilityRegistry } from "@jarvis/capability-registry";
 import { loadConfig } from "./config.js";
 import { initPlatform } from "./platform.js";
@@ -164,6 +164,10 @@ async function main(): Promise<void> {
     },
   };
 
+  const fileWatch = new FileWatchSource({
+    rootDir: process.env.JARVIS_WATCH_DIR ?? path.join(os.homedir(), "jarvis-workspace"),
+  });
+
   // ---- 崩溃恢复（架构 §9.3）----
   const orphans = tasks.recoverOrphans();
   if (orphans.length > 0) {
@@ -221,6 +225,34 @@ async function main(): Promise<void> {
     intervalMs: 120_000,
     run: async () => {
       await context.sampleFrom(foreground);
+    },
+  });
+
+  // 授权工作区文件变化（只看路径/mtime/size，不读文件内容）。
+  if (process.env.JARVIS_WATCH_FILES !== "0") {
+    rt.schedule({
+      id: "file-watch",
+      name: "工作区文件感知",
+      intervalMs: 30_000,
+      run: async () => { await context.sampleFrom(fileWatch); },
+    });
+  }
+
+  // 长期目标跟进：超过 7 天未复核才提醒，规则型、无 LLM。
+  rt.schedule({
+    id: "goal-followup",
+    name: "长期目标跟进",
+    intervalMs: 6 * 3_600_000,
+    run: async () => {
+      const stale = findStaleGoals(memory.list({ kind: "goal" })).slice(0, 2);
+      for (const goal of stale) {
+        await rt.notify({
+          text: `目标「${goal.content}」已 ${goal.daysInactive} 天未复核。需要我帮你拆解下一步吗？`,
+          priority: "normal",
+          dedupeKey: `goal:${goal.id}:${new Date().toISOString().slice(0, 10)}`,
+          at: new Date().toISOString(),
+        });
+      }
     },
   });
 
@@ -307,7 +339,7 @@ async function main(): Promise<void> {
   }
 
   console.log(`JARVIS daemon 0.2 · 平台 ${platform.id} · 数据 ${config.dbPath} · 通知 ${notifyFile}`);
-  console.log(`停滞检查 ${checkIntervalMs / 1000}s · 活动采样 120s · 空闲交流 600s · 心跳 30s · 记忆维护 ${process.env.JARVIS_MEMORY_AUTO === "0" ? "关闭" : `${memoryIntervalMs / 1000}s`} · 天气 cron 每日 08:00（城市 ${process.env.JARVIS_WEATHER_CITY ?? "Shanghai"}） · Ctrl+C 退出`);
+  console.log(`停滞检查 ${checkIntervalMs / 1000}s · 活动采样 120s · 文件感知 ${process.env.JARVIS_WATCH_FILES === "0" ? "关闭" : "30s"} · 目标跟进 6h · 空闲交流 600s · 心跳 30s · 记忆维护 ${process.env.JARVIS_MEMORY_AUTO === "0" ? "关闭" : `${memoryIntervalMs / 1000}s`} · 天气 cron 每日 08:00（城市 ${process.env.JARVIS_WEATHER_CITY ?? "Shanghai"}） · Ctrl+C 退出`);
 
   // 优雅退出
   let stopped = false;
